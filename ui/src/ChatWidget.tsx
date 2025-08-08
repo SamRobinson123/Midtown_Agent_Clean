@@ -2,13 +2,9 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import "./index.css";
 
 type Role = "user" | "ai";
+interface Msg { role: Role; text: string }
 
-interface Msg {
-  role: Role;
-  text: string;
-}
-
-/* ----------------------- Welcome Bubble ----------------------- */
+/* ---------- Fancy Welcome Bubble ---------- */
 function WelcomeBubble({ onQuick }: { onQuick: (s: string) => void }) {
   return (
     <div className="row ai">
@@ -24,30 +20,16 @@ function WelcomeBubble({ onQuick }: { onQuick: (s: string) => void }) {
         </div>
 
         <div className="welcome-chips">
-          <button
-            className="chip"
-            onClick={() =>
-              onQuick("I’d like to book or change an appointment")
-            }
-          >
+          <button className="chip" onClick={() => onQuick("I’d like to book or change an appointment")}>
             Book an appointment
           </button>
-          <button
-            className="chip"
-            onClick={() => onQuick("What are your clinic hours?")}
-          >
+          <button className="chip" onClick={() => onQuick("What are your clinic hours?")}>
             Clinic hours
           </button>
-          <button
-            className="chip"
-            onClick={() => onQuick("I need directions to the dental clinic.")}
-          >
+          <button className="chip" onClick={() => onQuick("I need directions to the dental clinic.")}>
             Directions
           </button>
-          <button
-            className="chip"
-            onClick={() => onQuick("Can you estimate my costs?")}
-          >
+          <button className="chip" onClick={() => onQuick("Can you estimate my costs?")}>
             Estimate costs
           </button>
         </div>
@@ -58,20 +40,15 @@ function WelcomeBubble({ onQuick }: { onQuick: (s: string) => void }) {
   );
 }
 
-/* ----------------------- Rich Text (lightweight) ----------------------- */
+/* ---------- Tiny Markdown (supports **bold**) ---------- */
 function RichText({ text }: { text: string }) {
-  // super light markdown: **bold**
   const html = useMemo(() => {
-    const safe = text
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;");
+    const safe = text.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
     return safe.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
   }, [text]);
   return <div dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
-/* ----------------------- Main Widget ----------------------- */
 export default function ChatWidget() {
   const [msgs, setMsgs] = useState<Msg[]>([
     { role: "ai", text: "Welcome! How can I help you today?" }, // placeholder for WelcomeBubble
@@ -80,7 +57,10 @@ export default function ChatWidget() {
   const [loading, setLoading] = useState(false);
   const listRef = useRef<HTMLDivElement | null>(null);
 
-  // auto-scroll on new messages
+  // Always request the logo under the correct base (/ui/)
+  const logoSrc = `${import.meta.env.BASE_URL}revolt-logo.png`;
+
+  // Auto-scroll on new messages
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
   }, [msgs]);
@@ -94,7 +74,7 @@ export default function ChatWidget() {
     setInput("");
     setLoading(true);
 
-    // Build history as pairs like [[user, ai], ...] for your FastAPI backend
+    // Build [[user, ai], ...] pairs the backend expects
     const pairs: any[] = [];
     let pending: string | null = null;
     for (const m of nextMsgs) {
@@ -102,12 +82,8 @@ export default function ChatWidget() {
         if (pending !== null) pairs.push([pending, ""]);
         pending = m.text;
       } else {
-        if (pending !== null) {
-          pairs.push([pending, m.text]);
-          pending = null;
-        } else {
-          pairs.push(["", m.text]);
-        }
+        if (pending !== null) { pairs.push([pending, m.text]); pending = null; }
+        else { pairs.push(["", m.text]); }
       }
     }
     if (pending !== null) pairs.push([pending, ""]);
@@ -122,21 +98,14 @@ export default function ChatWidget() {
       const data = await resp.json();
       const answer: string = data?.answer ?? "Sorry, something went wrong.";
       setMsgs((m) => [...m, { role: "ai", text: answer }]);
-    } catch (e: any) {
-      setMsgs((m) => [
-        ...m,
-        { role: "ai", text: "⚠️ Sorry—something went wrong. Please try again." },
-      ]);
-      // optionally console.error(e);
+    } catch {
+      setMsgs((m) => [...m, { role: "ai", text: "⚠️ Sorry—something went wrong. Please try again." }]);
     } finally {
       setLoading(false);
     }
   };
 
-  const onSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    void send(input);
-  };
+  const onSubmit = (e: React.FormEvent) => { e.preventDefault(); void send(input); };
 
   return (
     <div className="widget">
@@ -152,4 +121,61 @@ export default function ChatWidget() {
         <button
           className="close-x"
           aria-label="Close"
-          onClick={() => al
+          onClick={() => alert("Hook this to your launcher toggle if desired.")}
+        >
+          ×
+        </button>
+      </div>
+
+      {/* Quick actions */}
+      <div className="pills">
+        <button className="pill" onClick={() => send("I’d like to book or change an appointment")}>
+          Appointments
+        </button>
+        <button className="pill" onClick={() => send("I have a general question")}>
+          General Questions
+        </button>
+      </div>
+
+      {/* Messages */}
+      <div className="messages" ref={listRef}>
+        {msgs.map((m, i) => {
+          // First AI message → rich welcome card
+          if (i === 0 && m.role === "ai") return <WelcomeBubble key="welcome" onQuick={send} />;
+          return (
+            <div className={`row ${m.role}`} key={i}>
+              {m.role === "ai" && <div className="ai-avatar">AI</div>}
+              <div className="msg"><RichText text={m.text} /></div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Composer */}
+      <form className="composer" onSubmit={onSubmit}>
+        <input
+          className="input"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          placeholder="Enter your message…"
+          disabled={loading}
+        />
+        <button className="send-btn" disabled={loading}>
+          {loading ? "…" : "Send"}
+        </button>
+      </form>
+
+      {/* Powered by */}
+      <div className="powered">
+        <img
+          src={logoSrc}
+          alt="Revolt AI"
+          className="powered-logo"
+          onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
+        />
+        <span>Powered by</span>
+        <a href="https://revolt.ai" target="_blank" rel="noreferrer">Revolt AI</a>
+      </div>
+    </div>
+  );
+}
