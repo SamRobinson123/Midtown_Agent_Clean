@@ -4,7 +4,7 @@ import "./index.css";
 type Role = "user" | "ai";
 interface Msg { role: Role; text: string }
 
-/* ---------- Fancy Welcome Bubble ---------- */
+/* ---------- Fancy Welcome Bubble (no "helpful" row) ---------- */
 function WelcomeBubble({ onQuick }: { onQuick: (s: string) => void }) {
   return (
     <div className="row ai">
@@ -33,8 +33,6 @@ function WelcomeBubble({ onQuick }: { onQuick: (s: string) => void }) {
             Estimate costs
           </button>
         </div>
-
-        <div className="welcome-meta">Was this helpful? 👍 👎</div>
       </div>
     </div>
   );
@@ -55,6 +53,7 @@ export default function ChatWidget() {
   ]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [open, setOpen] = useState(false);               // ← widget open/close
   const listRef = useRef<HTMLDivElement | null>(null);
 
   // Always request the logo under the correct base (/ui/)
@@ -63,7 +62,7 @@ export default function ChatWidget() {
   // Auto-scroll on new messages
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
-  }, [msgs]);
+  }, [msgs, open]);
 
   const send = async (text: string) => {
     const trimmed = text.trim();
@@ -108,74 +107,82 @@ export default function ChatWidget() {
   const onSubmit = (e: React.FormEvent) => { e.preventDefault(); void send(input); };
 
   return (
-    <div className="widget">
-      {/* Header */}
-      <div className="header">
-        <div className="brand-left">
-          <div className="brand-avatar">AI</div>
-          <div className="brand-txt">
-            <div className="brand-title">UPFH Virtual Front Desk</div>
-            <div className="brand-sub">We typically reply in a few minutes.</div>
+    <div className="widget-container">
+      {/* Launcher (floating button) */}
+      {!open && (
+        <button className="launcher" onClick={() => setOpen(true)} aria-label="Open chat">
+          <span className="launcher-ai">AI</span>
+        </button>
+      )}
+
+      {/* Panel */}
+      {open && (
+        <div className="widget-panel">
+          {/* Header */}
+          <div className="header">
+            <div className="brand-left">
+              <div className="brand-avatar">AI</div>
+              <div className="brand-txt">
+                <div className="brand-title">UPFH Virtual Front Desk</div>
+                <div className="brand-sub">We typically reply in a few minutes.</div>
+              </div>
+            </div>
+            <button className="close-x" aria-label="Close" onClick={() => setOpen(false)}>×</button>
+          </div>
+
+          {/* Quick actions */}
+          <div className="pills">
+            <button className="pill" onClick={() => send("I’d like to book or change an appointment")}>
+              Appointments
+            </button>
+            <button className="pill" onClick={() => send("I have a general question")}>
+              General Questions
+            </button>
+          </div>
+
+          {/* Messages */}
+          <div className="messages" ref={listRef}>
+            {msgs.map((m, i) => {
+              // First AI message → rich welcome card
+              if (i === 0 && m.role === "ai") return <WelcomeBubble key="welcome" onQuick={send} />;
+              return (
+                <div className={`row ${m.role}`} key={i}>
+                  {m.role === "ai" && <div className="ai-avatar">AI</div>}
+                  <div className="msg"><RichText text={m.text} /></div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Composer */}
+          <form className="composer" onSubmit={onSubmit}>
+            <input
+              className="input"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="Enter your message…"
+              disabled={loading}
+            />
+            <button className="send-btn" disabled={loading}>
+              {loading ? "…" : "Send"}
+            </button>
+          </form>
+
+          {/* Powered by (logo + label, clickable) */}
+          <div className="powered">
+            <span>Powered by</span>
+            <img
+              src={logoSrc}
+              alt="Revolt AI"
+              className="powered-logo"
+              onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
+            />
+            <a href="https://revolt.ai" target="_blank" rel="noreferrer" className="powered-link">
+              Revolt AI
+            </a>
           </div>
         </div>
-        <button
-          className="close-x"
-          aria-label="Close"
-          onClick={() => alert("Hook this to your launcher toggle if desired.")}
-        >
-          ×
-        </button>
-      </div>
-
-      {/* Quick actions */}
-      <div className="pills">
-        <button className="pill" onClick={() => send("I’d like to book or change an appointment")}>
-          Appointments
-        </button>
-        <button className="pill" onClick={() => send("I have a general question")}>
-          General Questions
-        </button>
-      </div>
-
-      {/* Messages */}
-      <div className="messages" ref={listRef}>
-        {msgs.map((m, i) => {
-          // First AI message → rich welcome card
-          if (i === 0 && m.role === "ai") return <WelcomeBubble key="welcome" onQuick={send} />;
-          return (
-            <div className={`row ${m.role}`} key={i}>
-              {m.role === "ai" && <div className="ai-avatar">AI</div>}
-              <div className="msg"><RichText text={m.text} /></div>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Composer */}
-      <form className="composer" onSubmit={onSubmit}>
-        <input
-          className="input"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="Enter your message…"
-          disabled={loading}
-        />
-        <button className="send-btn" disabled={loading}>
-          {loading ? "…" : "Send"}
-        </button>
-      </form>
-
-      {/* Powered by */}
-      <div className="powered">
-        <img
-          src={logoSrc}
-          alt="Revolt AI"
-          className="powered-logo"
-          onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
-        />
-        <span>Powered by</span>
-        <a href="https://revolt.ai" target="_blank" rel="noreferrer">Revolt AI</a>
-      </div>
+      )}
     </div>
   );
 }
