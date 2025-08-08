@@ -3,5 +3,6 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
-  base: "/ui/" // ensures assets resolve when FastAPI mounts at /ui
+  // your FastAPI mounts the UI at /ui, so make all asset paths relative to /ui/
+  base: "/ui/",
 });
