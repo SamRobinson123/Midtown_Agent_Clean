@@ -1,7 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import "./chat-widget.css";
-// If you ever want to use an image again, put it in /public and import it like this:
-// import logoUrl from "/revolt-logo.png";
 
 type Msg = { id: string; role: "user" | "assistant"; text: string; rated?: null | boolean };
 const uid = () => Math.random().toString(36).slice(2, 9);
@@ -20,7 +18,7 @@ export default function ChatWidget() {
     { id: uid(), role: "assistant", text: initialBotMsg, rated: null },
   ]);
 
-  // Mobile detection that updates on rotate/resize
+  // responsive: toggle full-screen on small screens + rotation
   const [isMobile, setIsMobile] = useState(false);
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -36,7 +34,6 @@ export default function ChatWidget() {
     };
   }, []);
 
-  // auto-scroll
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -56,12 +53,12 @@ export default function ChatWidget() {
     setBusy(true);
 
     try {
-      // Build user/assistant pairs for /chat
+      // build pairs for /chat
       const pairs: [string, string][] = [];
-      let u: string | null = null;
+      let pending: string | null = null;
       for (const m of messages) {
-        if (m.role === "user") u = m.text;
-        else if (m.role === "assistant" && u !== null) { pairs.push([u, m.text]); u = null; }
+        if (m.role === "user") pending = m.text;
+        else if (m.role === "assistant" && pending !== null) { pairs.push([pending, m.text]); pending = null; }
       }
       const resp = await fetch("/chat", {
         method: "POST",
@@ -96,14 +93,10 @@ export default function ChatWidget() {
       )}
 
       {open && (
-        <section
-          className={`rw-widget ${isMobile ? "rw-mobile" : ""}`}
-          role="dialog"
-          aria-label="UPFH Virtual Front Desk"
-        >
+        <section className={`rw-widget ${isMobile ? "rw-mobile" : ""}`} role="dialog" aria-label="UPFH Virtual Front Desk">
           {/* HEADER */}
           <header className="rw-header">
-            {/* Block “AI” monogram (no image) */}
+            {/* “AI” tile */}
             <div className="rw-logo-tile" aria-hidden>AI</div>
 
             <div className="rw-brand">
@@ -112,7 +105,7 @@ export default function ChatWidget() {
             </div>
             <button className="rw-close" aria-label="Minimize" onClick={() => setOpen(false)}>✕</button>
 
-            {/* quick-reply buttons */}
+            {/* Quick-reply chips */}
             <div className="rw-quick">
               {quickReplies.map((q) => (
                 <button key={q.label} className="rw-chip" onClick={() => send(q.text)}>
@@ -144,7 +137,7 @@ export default function ChatWidget() {
             ))}
           </div>
 
-          {/* INPUT + BRAND (icons removed) */}
+          {/* INPUT + BRAND */}
           <footer className="rw-input">
             <input
               value={input}
@@ -158,8 +151,9 @@ export default function ChatWidget() {
               Send
             </button>
 
+            {/* Real Revolt logo from /public */}
             <div className="rw-powered">
-              <div className="rw-powered-dot" aria-hidden>R</div>
+              <img className="rw-powered-logo" src="/revolt-logo.svg" alt="Revolt AI logo" />
               <span>Powered by <strong>Revolt AI</strong></span>
             </div>
           </footer>
@@ -169,7 +163,7 @@ export default function ChatWidget() {
   );
 }
 
-/** tiny markdown renderer: **bold** + paragraphs */
+/* tiny markdown: paragraphs + **bold** */
 function renderMarkdownLite(md: string) {
   return (
     <>
