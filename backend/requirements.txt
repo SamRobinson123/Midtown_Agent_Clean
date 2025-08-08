@@ -1,24 +1,32 @@
-fastapi==0.109.*
-uvicorn[standard]
-openai
-python-dotenv
+# --- web app ---
+fastapi>=0.111,<0.120
+uvicorn[standard]>=0.30,<1.0
+pydantic>=2.6,<3              # FastAPI 0.111+ expects Pydantic v2
+
+# --- OpenAI SDK (new v1 API you use: OpenAI(), chat.completions.create) ---
+openai>=1.30,<2
+
+# --- env & utils ---
+python-dotenv>=1.0
+requests>=2.31
+beautifulsoup4>=4.12
+lxml>=4.9                      # optional; remove if you don't use the lxml parser
+
+# --- NLP / vector stuff ---
+scikit-learn>=1.4,<1.6
+numpy>=1.26,<3
+scipy>=1.11,<2
+
+# --- language detection ---
 langdetect>=1.0
-playwright
-beautifulsoup4
-lxml
-requests
-tiktoken
-chromadb
-sseclient-py
-scikit-learn
-numpy          # pulled by scikit-learn, but pin explicitly for reproducibility
-scipy          # same as above
-gradio==3.50.*
-pydantic==1.10.15
-sendgrid==6.11.0
-google-auth
-google-auth-oauthlib
-google-api-python-client
-flask>=3.0       
+
+# --- Google APIs (Gmail + Calendar) ---
+google-auth>=2.27
+google-auth-oauthlib>=1.2
+google-api-python-client>=2.129
+
+# --- telephony ---
 twilio>=9.0
-langdetect>=1.0
+
+# --- keep Gradio only if you still want the debug panel at /gradio ---
+gradio>=4.31,<5
