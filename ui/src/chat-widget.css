@@ -1,6 +1,6 @@
 :root{
-  --indigo:#4f46e5;   /* header gradient start */
-  --sky:#0ea5e9;      /* header gradient end   */
+  --indigo:#4f46e5;
+  --sky:#0ea5e9;
   --text:#111827;
   --muted:#6b7280;
   --border:#e5e7eb;
@@ -9,7 +9,7 @@
 
 *{box-sizing:border-box}
 
-/* Launcher button (when minimized) */
+/* Launcher */
 .rw-launcher{
   position:fixed; right:22px; bottom:22px; z-index:2147483000;
   width:60px; height:60px; border:none; cursor:pointer;
@@ -19,68 +19,68 @@
 }
 .rw-launcher:hover{opacity:.95}
 
-/* Main widget — a little larger */
+/* Widget — bumped size a little */
 .rw-widget{
   position:fixed; right:22px; bottom:22px; z-index:2147483000;
-  width:min(92vw, 440px);              /* was 390px */
-  max-height:82dvh;                    /* more height too */
+  width:min(92vw, 480px);          /* was 440px */
+  max-height:84dvh;                /* was 82dvh */
   display:flex; flex-direction:column; overflow:hidden;
   background:var(--bg); color:var(--text);
-  border:1px solid var(--border); border-radius:20px;
+  border:1px solid var(--border); border-radius:22px;
   box-shadow:0 22px 56px rgba(0,0,0,.26);
   font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif;
 }
 
 /* Header */
 .rw-header{
-  position:relative; padding:16px 18px 54px 18px; color:#fff;
+  position:relative; padding:18px 20px 62px 20px; color:#fff;
   background-image:linear-gradient(90deg,var(--indigo),var(--sky));
 }
 .rw-close{
-  position:absolute; right:10px; top:10px; color:#fff; opacity:.9;
+  position:absolute; right:12px; top:12px; color:#fff; opacity:.9;
   background:transparent; border:none; font-size:18px; cursor:pointer;
   border-radius:999px; padding:4px 8px;
 }
 .rw-close:hover{background:rgba(255,255,255,.12)}
 
-/* Block “AI” monogram */
+/* Block “AI” tile — slightly larger */
 .rw-logo-tile{
-  width:48px; height:48px; border-radius:12px;
+  width:52px; height:52px; border-radius:14px;
   background:linear-gradient(135deg,#0ea5e9,#22d3ee);
-  color:#0b1e3a;                       /* deep navy text */
+  color:#0b1e3a;
   display:inline-flex; align-items:center; justify-content:center;
-  font-weight:900; letter-spacing:0.5px;
+  font-weight:900; letter-spacing:.5px; font-size:20px;
   box-shadow:0 6px 16px rgba(0,0,0,.18), inset 0 0 0 1px rgba(255,255,255,.35);
   margin-right:12px;
 }
 .rw-brand{display:inline-block; vertical-align:middle}
-.rw-title{font-weight:700; line-height:1.1}
-.rw-subtitle{font-size:13px; opacity:.95}
+.rw-title{font-weight:700; line-height:1.1; font-size:20px}
+.rw-subtitle{font-size:13.5px; opacity:.95}
 
 /* Quick chips */
 .rw-quick{
-  position:absolute; left:0; right:0; bottom:-20px; padding:0 16px;
-  display:flex; gap:10px; flex-wrap:wrap;
+  position:absolute; left:0; right:0; bottom:-22px; padding:0 18px;
+  display:flex; gap:12px; flex-wrap:wrap;
 }
 .rw-chip{
-  background:#fff; color:#111827; font-size:14px;
-  padding:10px 14px; border-radius:999px; border:1px solid #e6e9f2;
+  background:#fff; color:#111827; font-size:15px;
+  padding:11px 16px; border-radius:999px; border:1px solid #e6e9f2;
   box-shadow:0 2px 6px rgba(0,0,0,.06); cursor:pointer;
 }
 .rw-chip:hover{background:#fafafa}
 
 /* Messages */
 .rw-scroll{
-  flex:1; overflow:auto; padding:20px 16px 12px 16px; background:#fff;
-  margin-top:6px; -webkit-overflow-scrolling:touch;
+  flex:1; overflow:auto; padding:22px 18px 12px 18px; background:#fff;
+  margin-top:8px; -webkit-overflow-scrolling:touch;
 }
-.rw-row{display:flex; margin:10px 0}
+.rw-row{display:flex; margin:12px 0}
 .rw-row.is-user{justify-content:flex-end}
 .rw-row.is-bot{justify-content:flex-start}
 
 .rw-msg{
-  max-width:86%; padding:12px 14px; border-radius:16px;
-  font-size:16px; line-height:1.5; box-shadow:0 1px 2px rgba(0,0,0,.04);
+  max-width:86%; padding:14px 16px; border-radius:16px;
+  font-size:17px; line-height:1.55; box-shadow:0 1px 2px rgba(0,0,0,.04);
 }
 .rw-msg-user{background:#eef2ff; border:1px solid #e0e7ff}
 .rw-msg-bot{background:#fff; border:1px solid var(--border)}
@@ -92,45 +92,43 @@
 
 /* Input (icons removed) */
 .rw-input{
-  position:relative; padding:12px;
+  position:relative; padding:14px;
   border-top:1px solid var(--border); background:#fff;
-  display:flex; gap:8px; align-items:center;
-  padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  display:flex; gap:10px; align-items:center;
+  padding-bottom: calc(14px + env(safe-area-inset-bottom));
 }
 .rw-input input{
-  flex:1; min-width:0; font-size:15px;
-  padding:12px 14px; border:1px solid var(--border); border-radius:12px;
+  flex:1; min-width:0; font-size:16px;
+  padding:14px 16px; border:1px solid var(--border); border-radius:14px;
   outline:none;
 }
 .rw-input input:focus{box-shadow:0 0 0 3px rgba(79,70,229,.18)}
 .rw-send{
-  background:var(--indigo); color:#fff; border:none; padding:12px 18px; border-radius:12px;
-  font-size:14px; font-weight:700; cursor:pointer;
+  background:var(--indigo); color:#fff; border:none; padding:14px 20px; border-radius:14px;
+  font-size:14px; font-weight:700; cursor:pointer; min-width:88px;
 }
 .rw-send:hover{background:#4338ca}
 .rw-send:disabled{opacity:.45; cursor:not-allowed}
 
 /* Branding */
 .rw-powered{
-  position:absolute; left:50%; transform:translateX(-50%); bottom:6px;
+  position:absolute; left:50%; transform:translateX(-50%); bottom:8px;
   display:flex; align-items:center; gap:8px; color:#6b7280; font-size:12px;
 }
-.rw-powered-dot{
-  width:18px; height:18px; border-radius:5px;
-  background:linear-gradient(135deg,#22d3ee,#60a5fa);
-  color:#0b1e3a; display:flex; align-items:center; justify-content:center;
-  font-weight:900; font-size:12px; box-shadow:0 1px 3px rgba(0,0,0,.2);
+.rw-powered-logo{
+  width:18px; height:18px; object-fit:contain; border-radius:3px;
+  box-shadow:0 1px 3px rgba(0,0,0,.12);
 }
 
-/* ----- MOBILE FULL-SCREEN MODE ----- */
+/* Mobile full-screen */
 .rw-mobile{
   right:0; left:0; bottom:0; top:0;
   width:100vw; height:100dvh; max-height:none;
   border-radius:0; border-left:0; border-right:0;
 }
 @media (max-width:480px){
-  .rw-header{ padding-bottom:60px; }
-  .rw-quick{ bottom:-24px; }
-  .rw-msg{ max-width:92%; font-size:16px; }           /* 16px avoids iOS zoom */
+  .rw-header{ padding-bottom:66px; }
+  .rw-quick{ bottom:-26px; }
+  .rw-msg{ max-width:92%; font-size:16px; }
   .rw-input input{ font-size:16px; }
 }
