@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import "./chat-widget.css";
-import logoUrl from "/revolt-logo.png";
+// If you ever want to use an image again, put it in /public and import it like this:
+// import logoUrl from "/revolt-logo.png";
 
 type Msg = { id: string; role: "user" | "assistant"; text: string; rated?: null | boolean };
 const uid = () => Math.random().toString(36).slice(2, 9);
@@ -19,13 +20,30 @@ export default function ChatWidget() {
     { id: uid(), role: "assistant", text: initialBotMsg, rated: null },
   ]);
 
+  // Mobile detection that updates on rotate/resize
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mql = window.matchMedia("(max-width: 480px)");
+    const onChange = (e: MediaQueryListEvent | MediaQueryList) =>
+      setIsMobile("matches" in e ? e.matches : (e as MediaQueryList).matches);
+    onChange(mql);
+    // @ts-ignore
+    (mql.addEventListener ?? mql.addListener).call(mql, "change", onChange);
+    return () => {
+      // @ts-ignore
+      (mql.removeEventListener ?? mql.removeListener).call(mql, "change", onChange);
+    };
+  }, []);
+
+  // auto-scroll
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages.length]);
 
   const lastAssistant = useMemo(
-    () => [...messages].reverse().find(m => m.role === "assistant"),
+    () => [...messages].reverse().find((m) => m.role === "assistant"),
     [messages]
   );
 
@@ -33,12 +51,12 @@ export default function ChatWidget() {
     const t = text.trim();
     if (!t || busy) return;
 
-    setMessages(m => [...m, { id: uid(), role: "user", text: t }]);
+    setMessages((m) => [...m, { id: uid(), role: "user", text: t }]);
     setInput("");
     setBusy(true);
 
     try {
-      // Convert current transcript into user/assistant pairs for your /chat endpoint
+      // Build user/assistant pairs for /chat
       const pairs: [string, string][] = [];
       let u: string | null = null;
       for (const m of messages) {
@@ -51,17 +69,19 @@ export default function ChatWidget() {
         body: JSON.stringify({ user_input: t, history: pairs }),
       });
       const data = await resp.json();
-      setMessages(m => [...m, { id: uid(), role: "assistant", text: data.answer, rated: null }]);
+      setMessages((m) => [...m, { id: uid(), role: "assistant", text: data.answer, rated: null }]);
     } catch {
-      setMessages(m => [...m, { id: uid(), role: "assistant", text: "Sorry—something went wrong. Please try again.", rated: null }]);
+      setMessages((m) => [
+        ...m,
+        { id: uid(), role: "assistant", text: "Sorry—something went wrong. Please try again.", rated: null },
+      ]);
     } finally {
       setBusy(false);
     }
   }
 
   function handleRate(id: string, ok: boolean) {
-    setMessages(m => m.map(x => (x.id === id ? { ...x, rated: ok } : x)));
-    // optional: POST feedback to your backend
+    setMessages((m) => m.map((x) => (x.id === id ? { ...x, rated: ok } : x)));
   }
 
   return (
@@ -76,27 +96,35 @@ export default function ChatWidget() {
       )}
 
       {open && (
-        <section className="rw-widget" role="dialog" aria-label="UPFH Virtual Front Desk">
-          {/* Header */}
+        <section
+          className={`rw-widget ${isMobile ? "rw-mobile" : ""}`}
+          role="dialog"
+          aria-label="UPFH Virtual Front Desk"
+        >
+          {/* HEADER */}
           <header className="rw-header">
-            <img src={logoUrl} alt="Revolt AI" className="rw-logo"/>
+            {/* Block “AI” monogram (no image) */}
+            <div className="rw-logo-tile" aria-hidden>AI</div>
+
             <div className="rw-brand">
               <div className="rw-title">UPFH Virtual Front Desk</div>
               <div className="rw-subtitle">We typically reply in a few minutes.</div>
             </div>
             <button className="rw-close" aria-label="Minimize" onClick={() => setOpen(false)}>✕</button>
 
-            {/* Quick-reply buttons */}
+            {/* quick-reply buttons */}
             <div className="rw-quick">
-              {quickReplies.map(q => (
-                <button key={q.label} className="rw-chip" onClick={() => send(q.text)}>{q.label}</button>
+              {quickReplies.map((q) => (
+                <button key={q.label} className="rw-chip" onClick={() => send(q.text)}>
+                  {q.label}
+                </button>
               ))}
             </div>
           </header>
 
-          {/* Messages */}
+          {/* MESSAGES */}
           <div className="rw-scroll" ref={scrollRef}>
-            {messages.map(m => (
+            {messages.map((m) => (
               <div key={m.id} className={`rw-row ${m.role === "user" ? "is-user" : "is-bot"}`}>
                 <div className={`rw-msg ${m.role === "user" ? "rw-msg-user" : "rw-msg-bot"}`}>
                   {renderMarkdownLite(m.text)}
@@ -116,21 +144,22 @@ export default function ChatWidget() {
             ))}
           </div>
 
-          {/* Input */}
+          {/* INPUT + BRAND (icons removed) */}
           <footer className="rw-input">
-            <button className="rw-icon" title="Attach">📎</button>
-            <button className="rw-icon" title="Emoji">😊</button>
             <input
               value={input}
-              onChange={e => setInput(e.target.value)}
-              onKeyDown={e => e.key === "Enter" && send(input)}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && send(input)}
               placeholder={busy ? "Thinking…" : "Enter your message…"}
               disabled={busy}
               aria-label="Type a message"
             />
-            <button className="rw-send" onClick={() => send(input)} disabled={busy || !input.trim()}>Send</button>
+            <button className="rw-send" onClick={() => send(input)} disabled={busy || !input.trim()}>
+              Send
+            </button>
+
             <div className="rw-powered">
-              <img src={logoUrl} alt="Revolt AI" />
+              <div className="rw-powered-dot" aria-hidden>R</div>
               <span>Powered by <strong>Revolt AI</strong></span>
             </div>
           </footer>
@@ -140,7 +169,7 @@ export default function ChatWidget() {
   );
 }
 
-/** Minimal markdown: **bold** + paragraphs */
+/** tiny markdown renderer: **bold** + paragraphs */
 function renderMarkdownLite(md: string) {
   return (
     <>
