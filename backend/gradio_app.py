@@ -8,7 +8,7 @@ UPFH Virtual Front Desk – baby‑blue embedded widget (Gradio 4.x)
 
 import os, functools
 import gradio as gr
-from upfh_bot.chatbot import chat                # ← your existing LLM function
+from bot.chatbot import chat                # ← your existing LLM function
 
 # ── 🎨  BRAND & TEXT SETTINGS ───────────────────────────────────────────────
 BRAND_BLUE   = "#8EC9FF"   # header & launcher colour
