@@ -1,8 +1,11 @@
 import os, re, html, logging
 from typing import Any, List, Dict
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from twilio.twiml.voice_response import VoiceResponse
 from langdetect import detect
@@ -25,30 +28,28 @@ LOCALE_MAP  = {
 }
 
 VOICE_WELCOME = {
-    "en": ("If this is an emergency, please hang up and dial nine‑one‑one or "
+    "en": ("If this is an emergency, please hang up and dial nine-one-one or "
            "go to the nearest emergency room immediately. Welcome to the Utah "
            "Partners for Health virtual front desk. You can book or change an "
            "appointment, estimate costs, or ask about clinic hours and "
            "providers. How can I help you today?"),
     "es": ("Si se trata de una emergencia, por favor cuelgue y llame al "
-           "nueve‑uno‑uno o diríjase de inmediato a la sala de emergencias "
+           "nueve-uno-uno o diríjase de inmediato a la sala de emergencias "
            "más cercana. Bienvenido al mostrador virtual de Utah Partners for "
            "Health. Puede reservar o cambiar una cita, estimar costos o "
            "preguntar sobre horarios y proveedores. ¿En qué puedo ayudarle?"),
 }
 
 VOICE_SYSTEM_PROMPT = (
-    "You are UPFH’s virtual front‑desk assistant **on a VOICE call**.\n"
+    "You are UPFH’s virtual front-desk assistant **on a VOICE call**.\n"
     "Ask **one question per turn**, then wait for the caller.\n\n"
-
-    # ── original booking steps, amended ──────────────────────────────
     "Booking flow:\n"
     "1. full name\n"
-    "2. e‑mail\n"
+    "2. e-mail\n"
     "3. phone\n"
-    "4. preferred **date or 3–7‑day window** (no time yet)\n"
+    "4. preferred **date or 3–7-day window** (no time yet)\n"
     "   • Immediately call `check_calendar_availability` for that day / range\n"
-    "   • Read back **up to five** free 30‑minute slots (e.g. “Ten‑thirty a.m.”)\n"
+    "   • Read back **up to five** free 30-minute slots (e.g. “Ten-thirty a.m.”)\n"
     "   • Let the caller choose one, then call `create_calendar_event`\n"
     "5. reason for the visit (if not already gathered)\n"
     "6. ask: “Do you have insurance we can bill?” (yes/no)\n\n"
@@ -57,20 +58,18 @@ VOICE_SYSTEM_PROMPT = (
     "After all slots, read back a short summary, ask for confirmation, and on "
     "any affirmative reply call `submit_appointment_request` (and "
     "`estimate_fee` if gathered).\n\n"
-
-    # ── language + privacy rules (unchanged + new) ───────────────────
     "Always speak in the caller’s language (English or Spanish).\n"
-    "Never reveal internal Google‑Calendar links or event IDs to the caller."
+    "Never reveal internal Google-Calendar links or event IDs to the caller."
 )
 
 if "OPENAI_API_KEY" not in os.environ:
     raise RuntimeError("Set OPENAI_API_KEY in the environment")
 
-app = FastAPI(title="UPFH Front‑Desk – Chat & Voice", version="2.7.1")
+app = FastAPI(title="UPFH Front-Desk – Chat & Voice", version="2.7.1")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_methods=["POST", "GET"],
+    allow_methods=["POST", "GET", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -78,8 +77,10 @@ app.add_middleware(
 class ChatTurn(BaseModel):
     user_input: str
     history: List[Any] | None = None
+
 class ChatResp(BaseModel):
     answer: str
+
 @app.post("/chat", response_model=ChatResp)
 def chat_json(turn: ChatTurn):
     try:
@@ -108,6 +109,7 @@ def detect_lang(txt: str) -> str:
 
 # ── /voice ─────────────────────────
 sessions: Dict[str, Dict[str, Any]] = {}
+
 @app.post("/voice", response_class=Response,
           responses={200: {"content": {"text/xml": {}}}})
 async def voice(request: Request):
@@ -143,9 +145,27 @@ async def voice(request: Request):
           voice=voice_id, allow_ssml=True)
     return Response(str(vr), media_type="text/xml")
 
-# ── Gradio widget ──────────────────
-gr.mount_gradio_app(app, build_widget(), path="/")
+# ── React UI (built) ───────────────────────────────────────────────────
+UI_DIST = Path(__file__).resolve().parents[1] / "ui" / "dist"
+if UI_DIST.exists():
+    app.mount("/ui", StaticFiles(directory=str(UI_DIST), html=True), name="ui")
 
+    @app.get("/")
+    def root_redirect():
+        # Redirect root to the UI
+        return RedirectResponse(url="/ui")
+else:
+    logging.warning("UI build not found at %s. Build it with `npm run build` in ui/.", UI_DIST)
+
+    @app.get("/")
+    def root_status():
+        return {"status": "ok", "message": "UI not built yet. Visit /gradio or /docs."}
+
+# ── Gradio widget (kept for debugging) ─────────────────────────────────
+# Mount at /gradio so it doesn't conflict with the root or /ui
+gr.mount_gradio_app(app, build_widget(), path="/gradio")
+
+# ── Uvicorn entrypoint ────────────────────────────────────────────────
 if __name__ == "__main__":
     logging.basicConfig(level="INFO", format="%(levelname)s  %(message)s")
     uvicorn.run("backend.main:app", host="0.0.0.0",

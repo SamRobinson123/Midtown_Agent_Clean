@@ -1,39 +1,55 @@
 """
-UPFH Virtual Front‑Desk Chat‑Bot
+UPFH Virtual Front-Desk Chat-Bot
 ────────────────────────────────
-• OpenAI tool‑enabled assistant
-• Google Calendar real‑time scheduling
-• Sliding‑fee calculator
+• OpenAI tool-enabled assistant
+• Google Calendar real-time scheduling
+• Sliding-fee calculator
 • Gmail confirmations
-• TF‑IDF site search + summaries
+• TF-IDF site search + summaries
 """
 
 from __future__ import annotations
+
 # ── stdlib ─────────────────────────────────────────────────────────────
-import os, time, json, difflib, logging, base64, email.message, re
-from datetime import datetime, timedelta, timezone
+import os
+import time
+import json
+import difflib
+import logging
+import base64
+import email.message
+import re
+from datetime import datetime, timedelta, date as dt_date
 from pathlib import Path
-from textwrap import wrap
 from typing import List, Dict, Any, Optional, Tuple
 from urllib.parse import urljoin, urldefrag
-# ── 3rd‑party ──────────────────────────────────────────────────────────
+
+# ── 3rd-party ──────────────────────────────────────────────────────────
 from dotenv import load_dotenv
-import requests, bs4
+import requests
+import bs4
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.preprocessing import normalize
 from openai import OpenAI
 from googleapiclient.discovery import build
-from google.oauth2.credentials import Credentials               # Gmail OAuth
-from google.oauth2.service_account import Credentials as SA_Creds  # Calendar SA
+from google.oauth2.credentials import Credentials  # Gmail & OAuth user
+from google.oauth2.service_account import Credentials as SA_Creds  # Service acct
+from zoneinfo import ZoneInfo
+
 # ── logging ────────────────────────────────────────────────────────────
-logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"),
-                    format="%(levelname)s  %(message)s",
-                    force=True)
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO"),
+    format="%(levelname)s  %(message)s",
+    force=True,
+)
+log = logging.getLogger(__name__)
 
 # ══════════════════════════════════════════════════════════════════════
 # 0 ► ENV / GLOBALS
 # ══════════════════════════════════════════════════════════════════════
-load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
+
+# Load .env from repo root (../.. from this file when inside bot/)
+load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or ""
 if not OPENAI_API_KEY:
@@ -41,51 +57,95 @@ if not OPENAI_API_KEY:
 openai = OpenAI(api_key=OPENAI_API_KEY)
 
 FROM_ADDR = os.getenv("FROM_EMAIL", "samrobinson290225@gmail.com")
-FROM_NAME = "Utah Partners for Health"
+FROM_NAME = os.getenv("FROM_NAME", "Utah Partners for Health")
 
-# ── Gmail creds ───────────────────────────────────────────────────────
-GMAIL_TOKEN = os.getenv("GMAIL_TOKEN_PATH", "gmail_token.json").strip('"')
+# Canonical timezone config (single source of truth)
+_TZ_NAME = os.getenv("TIMEZONE", "America/Denver")
+_TZ = ZoneInfo(_TZ_NAME)
+
+# Gmail token path (file fallback)
+GMAIL_TOKEN = (os.getenv("GMAIL_TOKEN_PATH") or "gmail_token.json").strip('"')
 _GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
 
+# Calendar config
+_CAL_SCOPES = ["https://www.googleapis.com/auth/calendar"]
+_CAL_ID = os.getenv("UPFH_CALENDAR_ID", "primary")
+
+# Shared email validator (used by tools + email)
+_EMAIL_OK = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+# ══════════════════════════════════════════════════════════════════════
+# Auth helpers with base64-env OR file fallback
+# ══════════════════════════════════════════════════════════════════════
+
 def _gmail_service():
-    creds = Credentials.from_authorized_user_file(GMAIL_TOKEN, _GMAIL_SCOPES)
+    """
+    Build a Gmail API client.
+
+    Preferred:
+      GMAIL_OAUTH_JSON_B64  (base64-encoded JSON for Credentials.from_authorized_user_info)
+    Fallback:
+      GMAIL_TOKEN_PATH → path to token JSON file (default: gmail_token.json)
+    """
+    b64 = os.getenv("GMAIL_OAUTH_JSON_B64")
+    if b64:
+        info = json.loads(base64.b64decode(b64))
+        creds = Credentials.from_authorized_user_info(info, _GMAIL_SCOPES)
+    else:
+        if not Path(GMAIL_TOKEN).exists():
+            raise RuntimeError(
+                "Gmail creds not found. Set GMAIL_OAUTH_JSON_B64 or GMAIL_TOKEN_PATH."
+            )
+        creds = Credentials.from_authorized_user_file(GMAIL_TOKEN, _GMAIL_SCOPES)
     return build("gmail", "v1", credentials=creds, cache_discovery=False)
 
-# ── Google Calendar creds ─────────────────────────────────────────────
-from zoneinfo import ZoneInfo
-
-_CAL_SCOPES = ["https://www.googleapis.com/auth/calendar"]
-_CAL_ID     = os.getenv("UPFH_CALENDAR_ID", "primary")       # share clinic calendar
-_TZ         = "America/Denver"
 
 def _calendar_service():
     """
-    Return an authorised Calendar API client.
+    Build a Calendar API client.
 
     Priority:
-    1. If GOOGLE_OAUTH_TOKEN is set → use OAuth user creds (personal calendar)
-    2. Else use GOOGLE_CALENDAR_KEY service‑account creds (Workspace / robot)
+      1) GOOGLE_OAUTH_JSON_B64 (OAuth user credentials JSON, base64)
+      2) GOOGLE_SERVICE_ACCOUNT_JSON_B64 (service-account JSON, base64)
+      3) GOOGLE_OAUTH_TOKEN (file path)  → OAuth user token
+      4) GOOGLE_CALENDAR_KEY (file path) → service-account key
     """
-    oauth_path = os.getenv("GOOGLE_OAUTH_TOKEN")
-    if oauth_path:
-        if not Path(oauth_path).exists():
-            raise RuntimeError(f"OAuth token not found at {oauth_path}")
-        creds = Credentials.from_authorized_user_file(oauth_path, _CAL_SCOPES)
-        logging.info("Calendar auth: OAuth user token")
+    oauth_b64 = os.getenv("GOOGLE_OAUTH_JSON_B64")
+    sa_b64 = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON_B64")
+
+    if oauth_b64:
+        info = json.loads(base64.b64decode(oauth_b64))
+        creds = Credentials.from_authorized_user_info(info, _CAL_SCOPES)
+        log.info("Calendar auth: OAuth user (env b64)")
+    elif sa_b64:
+        info = json.loads(base64.b64decode(sa_b64))
+        creds = SA_Creds.from_service_account_info(info, scopes=_CAL_SCOPES)
+        log.info("Calendar auth: service-account (env b64)")
     else:
-        key_path = os.getenv("GOOGLE_CALENDAR_KEY")
-        if not key_path or not Path(key_path).exists():
-            raise RuntimeError("Neither GOOGLE_OAUTH_TOKEN nor GOOGLE_CALENDAR_KEY found.")
-        creds = SA_Creds.from_service_account_file(key_path, scopes=_CAL_SCOPES)
-        logging.info("Calendar auth: service‑account key")
+        oauth_path = os.getenv("GOOGLE_OAUTH_TOKEN")
+        if oauth_path and Path(oauth_path).exists():
+            creds = Credentials.from_authorized_user_file(oauth_path, _CAL_SCOPES)
+            log.info("Calendar auth: OAuth user (file)")
+        else:
+            key_path = os.getenv("GOOGLE_CALENDAR_KEY")
+            if not key_path or not Path(key_path).exists():
+                raise RuntimeError(
+                    "Calendar creds missing. Set GOOGLE_OAUTH_JSON_B64, "
+                    "GOOGLE_SERVICE_ACCOUNT_JSON_B64, GOOGLE_OAUTH_TOKEN or GOOGLE_CALENDAR_KEY."
+                )
+            creds = SA_Creds.from_service_account_file(key_path, scopes=_CAL_SCOPES)
+            log.info("Calendar auth: service-account (file)")
 
     return build("calendar", "v3", credentials=creds, cache_discovery=False)
 
 # ══════════════════════════════════════════════════════════════════════
-# 1 ► E‑MAIL HELPER
+# 1 ► E-MAIL HELPER
 # ══════════════════════════════════════════════════════════════════════
+
 def send_gmail(
-    to_list: List[str], subject: str, body: str,
+    to_list: List[str],
+    subject: str,
+    body: str,
     attachment: Optional[Tuple[str, bytes]] = None,
     sender: str = f"{FROM_NAME} <{FROM_ADDR}>",
 ) -> None:
@@ -94,34 +154,30 @@ def send_gmail(
     msg.set_content(body)
     if attachment:
         fname, data = attachment
-        msg.add_attachment(data, maintype="application", subtype="octet-stream",
-                           filename=fname)
+        msg.add_attachment(
+            data, maintype="application", subtype="octet-stream", filename=fname
+        )
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
-    _gmail_service().users().messages().send(userId="me",
-                                             body={"raw": raw}).execute()
-    logging.info("Gmail sent → %s", to_list)
+    _gmail_service().users().messages().send(userId="me", body={"raw": raw}).execute()
+    log.info("Gmail sent → %s", to_list)
 
 # ══════════════════════════════════════════════════════════════════════
-# 2 ► GOOGLE CALENDAR HELPERS  (time‑zone safe + auto‑e‑mail)
+# 2 ► GOOGLE CALENDAR HELPERS  (time-zone safe + auto-e-mail)
 # ══════════════════════════════════════════════════════════════════════
-from zoneinfo import ZoneInfo
-from datetime import datetime, timedelta, timezone, date as dt_date
-from typing import Dict, Any, List
-
-_TZ_NAME = "America/Denver"          # clinic zone
-_TZ      = ZoneInfo(_TZ_NAME)        # IANA object – handles DST automatically
 
 def _make_iso(date_str: str, hhmm: str) -> str:
     """
-    Convert YYYY‑MM‑DD and 'HH:MM' into an RFC‑3339 timestamp that
-    carries the correct ‑06:00 / ‑07:00 offset depending on the date.
+    Convert YYYY-MM-DD and 'HH:MM' into an RFC-3339 timestamp with the correct
+    offset for the clinic time zone (DST-aware).
     """
-    naive  = datetime.fromisoformat(f"{date_str}T{hhmm}:00")
-    aware  = naive.replace(tzinfo=_TZ)            # localise
-    return aware.isoformat(timespec="seconds")    # → '2025‑08‑04T09:00:00‑06:00'
+    naive = datetime.fromisoformat(f"{date_str}T{hhmm}:00")
+    aware = naive.replace(tzinfo=_TZ)  # localize
+    return aware.isoformat(timespec="seconds")
+
 
 def _iso2dt(iso: str) -> datetime:
     return datetime.fromisoformat(iso)
+
 
 def _iter_days(start: dt_date, end: dt_date):
     cur = start
@@ -129,33 +185,33 @@ def _iter_days(start: dt_date, end: dt_date):
         yield cur.isoformat()
         cur += timedelta(days=1)
 
-# ----------------------------------------------------------------------
+
 def check_calendar_availability(
     date: str | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
     duration_minutes: int = 30,
     work_start: str = "08:00",
-    work_end: str   = "17:30",
+    work_end: str = "17:30",
 ) -> Dict[str, Any]:
     """
-    Returns ≤10 free slots (ISO) for a single day OR for every day in a range.
+    Returns ≤10 free slots (ISO) for a single day OR for each day in a range.
     Pass either `date` **or** both `start_date` & `end_date`.
     """
-    # --- validate args -------------------------------------------------
+    # validate args
     if bool(date) == bool(start_date or end_date):
         raise ValueError("Pass `date` OR (`start_date` and `end_date`).")
     if (start_date and not end_date) or (end_date and not start_date):
         raise ValueError("Both `start_date` and `end_date` are required.")
 
-    # --- enumerate days ------------------------------------------------
+    # enumerate days
     if date:
         days = [date]
     else:
         s = dt_date.fromisoformat(start_date)
         e = dt_date.fromisoformat(end_date)
         if e < s or (e - s).days > 30:
-            raise ValueError("Bad date range (max 30 days).")
+            raise ValueError("Bad date range (max 30 days).")
         days = list(_iter_days(s, e))
 
     svc = _calendar_service()
@@ -163,7 +219,7 @@ def check_calendar_availability(
 
     for d in days:
         start_iso = _make_iso(d, work_start)
-        end_iso   = _make_iso(d, work_end)
+        end_iso = _make_iso(d, work_end)
 
         fb_req = {
             "timeMin": start_iso,
@@ -171,8 +227,7 @@ def check_calendar_availability(
             "timeZone": _TZ_NAME,
             "items": [{"id": _CAL_ID}],
         }
-        busy = svc.freebusy().query(body=fb_req).execute() \
-                     ["calendars"][_CAL_ID]["busy"]
+        busy = svc.freebusy().query(body=fb_req).execute()["calendars"][_CAL_ID]["busy"]
         busy = [(_iso2dt(b["start"]), _iso2dt(b["end"])) for b in busy]
 
         cursor, close = _iso2dt(start_iso), _iso2dt(end_iso)
@@ -188,10 +243,6 @@ def check_calendar_availability(
 
     return {"free_slots": free_by_day}
 
-# ----------------------------------------------------------------------
-# ----------------------------------------------------------------------
-import re
-_EMAIL_OK = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")   # already declared above
 
 def create_calendar_event(
     patient_name: str,
@@ -199,147 +250,180 @@ def create_calendar_event(
     end: str,
     email: str = "",
     phone: str = "",
-    reason: str = ""
+    reason: str = "",
 ) -> Dict[str, Any]:
     """
-    Books the slot in Google Calendar, immediately sends confirmation e‑mails,
-    and returns booking details to the LLM.
+    Book the slot in Google Calendar, immediately send confirmation e-mails,
+    and return booking details to the LLM.
     """
     svc = _calendar_service()
 
-    # ── attendees list only if patient e‑mail is valid ────────────────
+    # Attendees list only if patient e-mail is valid
     email = (email or "").strip()
     attendees = [{"email": email}] if _EMAIL_OK.match(email) else []
     send_flag = "all" if attendees else "none"
 
     evt = {
         "summary": f"{patient_name} – Clinic Visit",
-        "description": (
-            f"Reason: {reason}\nPhone: {phone}\nE‑mail: {email or '—'}"
-        ),
+        "description": f"Reason: {reason}\nPhone: {phone}\nE-mail: {email or '—'}",
         "start": {"dateTime": start, "timeZone": _TZ_NAME},
-        "end":   {"dateTime": end,   "timeZone": _TZ_NAME},
+        "end": {"dateTime": end, "timeZone": _TZ_NAME},
         "reminders": {"useDefault": True},
         "attendees": attendees,
     }
 
-    created = svc.events().insert(
-        calendarId=_CAL_ID,
-        body=evt,
-        sendUpdates=send_flag
-    ).execute()
+    created = (
+        svc.events()
+        .insert(calendarId=_CAL_ID, body=evt, sendUpdates=send_flag)
+        .execute()
+    )
 
-    preferred_date = start.split("T", 1)[0]          # YYYY‑MM‑DD
+    preferred_date = start.split("T", 1)[0]  # YYYY-MM-DD
 
-    # ── Immediately send confirmation e‑mails ─────────────────────────
+    # Immediately send confirmation e-mails
     payload = {
-        "email":           email,
-        "patient_name":    patient_name,
-        "phone":           phone,
-        "preferred_date":  preferred_date,
-        "preferred_time":  f"{start[11:16]} – {end[11:16]}",
-        "reason":          reason,
-    }
-    send_appt_email(payload)                         # uses the validated helper
-
-    # ── Return details back to the assistant / caller ─────────────────
-    return {
-        "status":       "booked",
-        "event_id":     created["id"],
-        "start":        start,
-        "end":          end,
-        "email":        email,
+        "email": email,
         "patient_name": patient_name,
-        "phone":        phone,
-        "reason":       reason,
+        "phone": phone,
+        "preferred_date": preferred_date,
+        "preferred_time": f"{start[11:16]} – {end[11:16]}",
+        "reason": reason,
+    }
+    send_appt_email(payload)
+
+    return {
+        "status": "booked",
+        "event_id": created["id"],
+        "start": start,
+        "end": end,
+        "email": email,
+        "patient_name": patient_name,
+        "phone": phone,
+        "reason": reason,
         "preferred_date": preferred_date,
     }
 
 # ══════════════════════════════════════════════════════════════════════
-# 3 ► TF‑IDF SEARCH & SUMMARY (trimmed but full‑function)
+# 3 ► TF-IDF SEARCH & SUMMARY (lazy build)
 # ══════════════════════════════════════════════════════════════════════
-MODEL = "gpt-4o-mini"
-SEED_URLS = ["https://www.upfh.org/",
-             "https://www.upfh.org/locations",
-             "https://www.upfh.org/providers",
-             "https://www.upfh.org/pharmacy",
-             "https://www.upfh.org/dental"]
+
+MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+
+SEED_URLS = [
+    "https://www.upfh.org/",
+    "https://www.upfh.org/locations",
+    "https://www.upfh.org/providers",
+    "https://www.upfh.org/pharmacy",
+    "https://www.upfh.org/dental",
+]
 MAX_PAGES = 1000
 SITE_CACHE: Dict[str, str] = {}
 VECT = DOC_EMB = DOC_URLS = None
 
+
 def _clean(html_text: str) -> str:
     soup = bs4.BeautifulSoup(html_text, "html.parser")
-    for t in soup(["script", "style", "noscript"]): t.decompose()
+    for t in soup(["script", "style", "noscript"]):
+        t.decompose()
     txt = soup.get_text(" ", strip=True)
     return re.sub(r"\s{2,}", " ", txt)
+
 
 def _get(url, tries=6, backoff=1.4):
     hdrs = {"User-Agent": "Mozilla/5.0"}
     for i in range(tries):
-        try:  return requests.get(url, headers=hdrs, timeout=10)
+        try:
+            return requests.get(url, headers=hdrs, timeout=10)
         except requests.RequestException:
-            if i == tries-1: raise
-            time.sleep(backoff*(i+1))
+            if i == tries - 1:
+                raise
+            time.sleep(backoff * (i + 1))
+
 
 def build_site_cache():
     q, seen = SEED_URLS.copy(), set()
     DOMAIN = "https://www.upfh.org/"
     while q and len(SITE_CACHE) < MAX_PAGES:
         url = q.pop(0)
-        if url in seen: continue
+        if url in seen:
+            continue
         seen.add(url)
         try:
             r = _get(url)
-            if r.status_code != 200 or not r.url.startswith(DOMAIN): continue
+            if r.status_code != 200 or not r.url.startswith(DOMAIN):
+                continue
             SITE_CACHE[url] = _clean(r.text)
             soup = bs4.BeautifulSoup(r.text, "html.parser")
             for a in soup.select("a[href]"):
                 link = urljoin(url, urldefrag(a["href"])[0])
-                if link.startswith(DOMAIN): q.append(link)
+                if link.startswith(DOMAIN):
+                    q.append(link)
             time.sleep(0.25)
-        except requests.RequestException: pass
+        except requests.RequestException:
+            pass
+
 
 def _build_index():
     global VECT, DOC_EMB, DOC_URLS
     DOC_URLS = list(SITE_CACHE)
     corpus = [SITE_CACHE[u] for u in DOC_URLS]
-    VECT = TfidfVectorizer(ngram_range=(1,2), stop_words="english").fit(corpus)
+    VECT = TfidfVectorizer(ngram_range=(1, 2), stop_words="english").fit(corpus)
     DOC_EMB = normalize(VECT.transform(corpus))
+
 
 def _ensure_index():
     if VECT is None:
-        if not SITE_CACHE: build_site_cache()
+        if not SITE_CACHE:
+            build_site_cache()
         _build_index()
+
 
 def search_upfh(query: str, top_k: int = 30) -> List[Dict]:
     _ensure_index()
     q_vec = normalize(VECT.transform([query.lower() + " doctor provider phone"]))
     scores = (DOC_EMB @ q_vec.T).toarray().ravel()
-    idxs = scores.argsort()[::-1][: top_k*4]
-    hits=[]
+    idxs = scores.argsort()[::-1][: top_k * 4]
+    hits = []
     for i in idxs:
         url, txt = DOC_URLS[i], SITE_CACHE[DOC_URLS[i]]
-        pos = txt.lower().find(query.split()[0].lower())
-        snippet = txt[max(0,pos-60):pos+180] + "…"
+        first_word = query.split()[0].lower() if query.split() else ""
+        pos = txt.lower().find(first_word) if first_word else 0
+        snippet = txt[max(0, pos - 60) : pos + 180] + "…"
         hits.append({"url": url, "snippet": snippet})
-        if len(hits)>=top_k: break
+        if len(hits) >= top_k:
+            break
     return hits
 
-def summarise_upfh(query: str, top_k: int = 3) -> Dict[str,Any]:
-    hits = search_upfh(query, top_k)
-    def _sum(text):
-        msgs=[{"role":"system","content":"≤500 words summary."},
-              {"role":"user","content":text[:3000]}]
-        return openai.chat.completions.create(model=MODEL,
-                                              messages=msgs)\
-                   .choices[0].message.content.strip()
-    return {"query": query,
-            "results": [{"url":h["url"],
-                         "summary":_sum(SITE_CACHE[h["url"]])} for h in hits]}
 
-build_site_cache(); _build_index()
-logging.info("Cached %d UPFH pages", len(SITE_CACHE))
+def summarise_upfh(query: str, top_k: int = 3) -> Dict[str, Any]:
+    hits = search_upfh(query, top_k)
+
+    def _sum(text):
+        msgs = [
+            {"role": "system", "content": "≤500 words summary."},
+            {"role": "user", "content": text[:3000]},
+        ]
+        return (
+            openai.chat.completions.create(model=MODEL, messages=msgs)
+            .choices[0]
+            .message.content.strip()
+        )
+
+    return {
+        "query": query,
+        "results": [
+            {"url": h["url"], "summary": _sum(SITE_CACHE[h["url"]])} for h in hits
+        ],
+    }
+
+# Optional eager warm-up (set env BUILD_INDEX_ON_IMPORT=1)
+if os.getenv("BUILD_INDEX_ON_IMPORT") == "1":
+    try:
+        build_site_cache()
+        _build_index()
+        log.info("Cached %d UPFH pages", len(SITE_CACHE))
+    except Exception as e:
+        log.warning("Index warmup failed: %s", e)
 
 # ══════════════════════════════════════════════════════════════════════
 # 4 ► SLIDING‑FEE CALCULATOR
@@ -405,27 +489,41 @@ FEE_TABLE = {
     "PT/INR (outside 14-day window)":             {"A":  15, "B":  16, "C":  17, "D":  18, "E":  20, "F": "Full charge"},
 }
 
+
 def poverty_percent(income: float, family_size: int) -> float:
-    base = 15_060 + (family_size-1)*5_380
-    return 100*income/base
+    base = 15_060 + (family_size - 1) * 5_380
+    return 100 * income / base
 
-def _norm_proc(raw:str)->str|None:
+
+def _norm_proc(raw: str) -> str | None:
     t = raw.strip().lower()
-    if not t: return None
+    if not t:
+        return None
     for k in FEE_TABLE:
-        if t==k.lower() or t in k.lower(): return k
-    close = difflib.get_close_matches(t,[k.lower() for k in FEE_TABLE],n=1,cutoff=.5)
-    return next((k for k in FEE_TABLE if k.lower()==close[0]),None) if close else None
+        if t == k.lower() or t in k.lower():
+            return k
+    close = difflib.get_close_matches(
+        t, [k.lower() for k in FEE_TABLE], n=1, cutoff=0.5
+    )
+    return next((k for k in FEE_TABLE if k.lower() == close[0]), None) if close else None
 
-def estimate_fee(income:float,family_size:int,procedure:str="Office Visit")->Dict[str,Any]:
-    pct=round(poverty_percent(income,family_size),1)
-    tier=next((r["tier"] for r in SLIDING_ROWS if r["min_pct"]<=pct<=r["max_pct"]),"F")
-    key=_norm_proc(procedure)
-    fee=FEE_TABLE.get(key,{}).get(tier,"Full charge")
-    return {"procedure":key or procedure,"tier":tier,
-            "poverty_percent":pct,"estimated_fee":fee}
 
-def list_upfh_services()->List[str]:
+def estimate_fee(income: float, family_size: int, procedure: str = "Office Visit") -> Dict[str, Any]:
+    pct = round(poverty_percent(income, family_size), 1)
+    tier = next(
+        (r["tier"] for r in SLIDING_ROWS if r["min_pct"] <= pct <= r["max_pct"]), "F"
+    )
+    key = _norm_proc(procedure)
+    fee = FEE_TABLE.get(key, {}).get(tier, "Full charge")
+    return {
+        "procedure": key or procedure,
+        "tier": tier,
+        "poverty_percent": pct,
+        "estimated_fee": fee,
+    }
+
+
+def list_upfh_services() -> List[str]:
     return sorted(FEE_TABLE.keys())
 
 # ══════════════════════════════════════════════════════════════════════
@@ -499,43 +597,47 @@ UPFH_LOCATIONS = {
     },
 }
 
-def lookup_location(keyword:str)->Dict[str,Any]:
-    kw=keyword.lower().strip()
-    for k,v in UPFH_LOCATIONS.items():
-        if kw in k or kw in v["name"].lower(): return v
+
+def lookup_location(keyword: str) -> Dict[str, Any]:
+    kw = keyword.lower().strip()
+    for k, v in UPFH_LOCATIONS.items():
+        if kw in k or kw in v["name"].lower():
+            return v
     for v in UPFH_LOCATIONS.values():
-        if any(w in v["name"].lower() for w in kw.split()): return v
+        if any(w in v["name"].lower() for w in kw.split()):
+            return v
     return {}
 
 # ══════════════════════════════════════════════════════════════════════
-# 6 ► TOOL SCHEMAS
+# 6 ► TOOL SCHEMAS
 # ══════════════════════════════════════════════════════════════════════
+
 calendar_avail_tool = {
     "name": "check_calendar_availability",
     "description": (
-        "Return ≤10 free 30‑minute slots for a specific date **or** each day "
-        "in a date range.  Supply *either* `date` (YYYY‑MM‑DD) *or* both "
+        "Return ≤10 free 30-minute slots for a specific date **or** each day "
+        "in a date range. Supply *either* `date` (YYYY-MM-DD) *or* both "
         "`start_date` and `end_date`."
     ),
     "parameters": {
         "type": "object",
         "properties": {
-            "date":       {"type": "string", "description": "YYYY‑MM‑DD"},
-            "start_date": {"type": "string", "description": "YYYY‑MM‑DD"},
-            "end_date":   {"type": "string", "description": "YYYY‑MM‑DD"},
+            "date": {"type": "string", "description": "YYYY-MM-DD"},
+            "start_date": {"type": "string", "description": "YYYY-MM-DD"},
+            "end_date": {"type": "string", "description": "YYYY-MM-DD"},
             "duration_minutes": {
-                "type": "integer", "default": 30,
-                "description": "Length of each suggested slot"
-            }
-        }
-        # no 'required', no 'oneOf' — OpenAI‑compliant
-    }
+                "type": "integer",
+                "default": 30,
+                "description": "Length of each suggested slot",
+            },
+        },
+    },
 }
 
 calendar_create_tool = {
     "name": "create_calendar_event",
     "description": (
-        "Book the chosen slot in Google Calendar.  "
+        "Book the chosen slot in Google Calendar. "
         "Returns `status`, `event_id`, `start`, and `end` "
         "but **never** the private htmlLink."
     ),
@@ -543,80 +645,90 @@ calendar_create_tool = {
         "type": "object",
         "properties": {
             "patient_name": {"type": "string"},
-            "email":        {"type": "string"},
-            "phone":        {"type": "string"},
-            "reason":       {"type": "string"},
-            "start":        {"type": "string", "description": "ISO dateTime"},
-            "end":          {"type": "string", "description": "ISO dateTime"}
+            "email": {"type": "string"},
+            "phone": {"type": "string"},
+            "reason": {"type": "string"},
+            "start": {"type": "string", "description": "ISO dateTime"},
+            "end": {"type": "string", "description": "ISO dateTime"},
         },
-        "required": ["patient_name", "start", "end"]
-    }
+        "required": ["patient_name", "start", "end"],
+    },
 }
 
 location_tool = {
-    "name":"upfh_location_lookup",
-    "description":"Return address, phone & hours for a UPFH location.",
-    "parameters":{"type":"object","properties":{"keyword":{"type":"string"}},
-                 "required":["keyword"]},
+    "name": "upfh_location_lookup",
+    "description": "Return address, phone & hours for a UPFH location.",
+    "parameters": {"type": "object", "properties": {"keyword": {"type": "string"}}, "required": ["keyword"]},
 }
 site_tool = {
-    "name":"upfh_site_search",
-    "description":"Keyword search across upfh.org.",
-    "parameters":{"type":"object",
-        "properties":{"query":{"type":"string"},
-                      "top_k":{"type":"integer","default":30}},
-        "required":["query"]},
+    "name": "upfh_site_search",
+    "description": "Keyword search across upfh.org.",
+    "parameters": {
+        "type": "object",
+        "properties": {"query": {"type": "string"}, "top_k": {"type": "integer", "default": 30}},
+        "required": ["query"],
+    },
 }
 site_summary_tool = {
-    "name":"upfh_site_summary",
-    "description":"Return concise summaries of upfh.org pages.",
-    "parameters":{"type":"object",
-        "properties":{"query":{"type":"string"},
-                      "top_k":{"type":"integer","default":3}},
-        "required":["query"]},
+    "name": "upfh_site_summary",
+    "description": "Return concise summaries of upfh.org pages.",
+    "parameters": {
+        "type": "object",
+        "properties": {"query": {"type": "string"}, "top_k": {"type": "integer", "default": 3}},
+        "required": ["query"],
+    },
 }
-services_tool = {"name":"list_upfh_services",
-                 "description":"All services on sliding‑fee schedule.",
-                 "parameters":{"type":"object","properties":{},"required":[]}}
+services_tool = {
+    "name": "list_upfh_services",
+    "description": "All services on sliding-fee schedule.",
+    "parameters": {"type": "object", "properties": {}},
+}
 sliding_fee_tool = {
-    "name":"estimate_fee",
-    "description":"Estimate visit cost (needs income, family_size, procedure).",
-    "parameters":{"type":"object",
-        "properties":{"income":{"type":"number"},
-                      "family_size":{"type":"integer"},
-                      "procedure":{"type":"string"}},
-        "required":["income","family_size","procedure"]},
+    "name": "estimate_fee",
+    "description": "Estimate visit cost (needs income, family_size, procedure).",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "income": {"type": "number"},
+            "family_size": {"type": "integer"},
+            "procedure": {"type": "string"},
+        },
+        "required": ["income", "family_size", "procedure"],
+    },
 }
 email_tool = {
-    "name":"submit_appointment_request",
-    "description":"Send confirmation e‑mails to patient + staff.",
-    "parameters":{"type":"object",
-        "properties":{"email":{"type":"string"},
-                      "patient_name":{"type":"string"},
-                      "phone":{"type":"string"},
-                      "preferred_date":{"type":"string"},
-                      "preferred_time":{"type":"string"},
-                      "reason":{"type":"string"},
-                      "has_insurance":{"type":"boolean"}},
-        "required":["email"]},
+    "name": "submit_appointment_request",
+    "description": "Send confirmation e-mails to patient + staff.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "email": {"type": "string"},
+            "patient_name": {"type": "string"},
+            "phone": {"type": "string"},
+            "preferred_date": {"type": "string"},
+            "preferred_time": {"type": "string"},
+            "reason": {"type": "string"},
+            "has_insurance": {"type": "boolean"},
+        },
+        "required": ["email"],
+    },
 }
 
 TOOLS = [
-    {"type":"function","function":location_tool},
-    {"type":"function","function":site_tool},
-    {"type":"function","function":site_summary_tool},
-    {"type":"function","function":services_tool},
-    {"type":"function","function":sliding_fee_tool},
-    # calendar tools
-    {"type":"function","function":calendar_avail_tool},
-    {"type":"function","function":calendar_create_tool},
-    # e‑mail
-    {"type":"function","function":email_tool},
+    {"type": "function", "function": location_tool},
+    {"type": "function", "function": site_tool},
+    {"type": "function", "function": site_summary_tool},
+    {"type": "function", "function": services_tool},
+    {"type": "function", "function": sliding_fee_tool},
+    {"type": "function", "function": calendar_avail_tool},
+    {"type": "function", "function": calendar_create_tool},
+    {"type": "function", "function": email_tool},
 ]
 
 # ══════════════════════════════════════════════════════════════════════
-# 7 ► SYSTEM PROMPT
+# 7 ► SYSTEM PROMPT
 # ══════════════════════════════════════════════════════════════════════
+
 SYSTEM_PROMPT = (
     "### UPFH Virtual Front-Desk Assistant\n"
     "#### TOOLS\n"
@@ -636,111 +748,114 @@ SYSTEM_PROMPT = (
     "- **Locations / addresses / hours / directions** → ALWAYS call *upfh_location_lookup*.\n"
     "- **Providers, services, fees, portal, pharmacy, etc.** → call *upfh_site_summary* (or *upfh_site_search* first if you need to find the right page).\n"
     "- Only include hyperlinks if the user explicitly asks for them.\n"
-    "#### EXAMPLES (follow exactly)\n"
-    "- User: \"Where are your clinics located?\"\n"
-    "  Assistant (internal): CALL upfh_location_lookup {\"keyword\": \"\"}\n"
-    "- User: \"What’s the address of the dental clinic?\"\n"
-    "  Assistant (internal): CALL upfh_location_lookup {\"keyword\": \"dental\"}\n"
     "#### STYLE\n"
     "- Warm, concise, HIPAA-compliant.\n"
     "- Detect language; respond in Spanish if user is > 60 % Spanish.\n"
 )
 
 WELCOME_BUBBLE = (
-"👋 **Welcome to the UPFH Virtual Front Desk!**\n\n"
-"• Book or reschedule an appointment (with live calendar)\n"
-"• Estimate costs on our sliding‑fee scale\n"
-"• Clinic hours, locations & provider info\n\n"
-"_How can I help you today?_"
+    "👋 **Welcome to the UPFH Virtual Front Desk!**\n\n"
+    "• Book or reschedule an appointment (with live calendar)\n"
+    "• Estimate costs on our sliding-fee scale\n"
+    "• Clinic hours, locations & provider info\n\n"
+    "_How can I help you today?_"
 )
 
 # ══════════════════════════════════════════════════════════════════════
-# 8 ► TOOL ROUTER
+# 8 ► TOOL ROUTER
 # ══════════════════════════════════════════════════════════════════════
+
 def _handle_tool_call(msg):
-    results=[]
+    results = []
     for call in msg.tool_calls or []:
         fn, raw = call.function.name, call.function.arguments or "{}"
-        try: args=json.loads(raw)
-        except Exception as exc:
-            logging.exception("Bad JSON for %s: %s",fn,exc); args={}
         try:
-            if fn=="upfh_location_lookup":
-                res=lookup_location(**args)
-            elif fn=="upfh_site_search":
-                res=search_upfh(**args)
-            elif fn=="upfh_site_summary":
-                res=summarise_upfh(**args)
-            elif fn=="list_upfh_services":
-                res=list_upfh_services()
-            elif fn=="estimate_fee":
-                res=estimate_fee(**args)
-            elif fn=="check_calendar_availability":
-                res=check_calendar_availability(**args)
-            elif fn=="create_calendar_event":
-                res=create_calendar_event(**args)
-            elif fn=="submit_appointment_request":
-                send_appt_email(args)
-                res={"status":"submitted"}
-            else:
-                res={"error":f"unknown tool {fn}"}
+            args = json.loads(raw)
         except Exception as exc:
-            logging.exception("%s failed: %s",fn,exc)
-            res={"error":str(exc)}
-        results.append({"role":"tool","tool_call_id":call.id,
-                        "content":json.dumps(res,ensure_ascii=False)})
+            log.exception("Bad JSON for %s: %s", fn, exc)
+            args = {}
+        try:
+            if fn == "upfh_location_lookup":
+                res = lookup_location(**args)
+            elif fn == "upfh_site_search":
+                res = search_upfh(**args)
+            elif fn == "upfh_site_summary":
+                res = summarise_upfh(**args)
+            elif fn == "list_upfh_services":
+                res = list_upfh_services()
+            elif fn == "estimate_fee":
+                res = estimate_fee(**args)
+            elif fn == "check_calendar_availability":
+                res = check_calendar_availability(**args)
+            elif fn == "create_calendar_event":
+                res = create_calendar_event(**args)
+            elif fn == "submit_appointment_request":
+                send_appt_email(args)
+                res = {"status": "submitted"}
+            else:
+                res = {"error": f"unknown tool {fn}"}
+        except Exception as exc:
+            log.exception("%s failed: %s", fn, exc)
+            res = {"error": str(exc)}
+        results.append(
+            {"role": "tool", "tool_call_id": call.id, "content": json.dumps(res, ensure_ascii=False)}
+        )
     return results
 
 # ══════════════════════════════════════════════════════════════════════
-# 9 ► MAIN CHAT LOOP (Gradio compatible)
+# 9 ► MAIN CHAT LOOP (Gradio & React widget compatible)
 # ══════════════════════════════════════════════════════════════════════
-def chat(user_input:str, history:Optional[List[Any]]=None)->str:
-    msgs=[{"role":"system","content":SYSTEM_PROMPT}]
+
+def chat(user_input: str, history: Optional[List[Any]] = None) -> str:
+    msgs = [{"role": "system", "content": SYSTEM_PROMPT}]
     if not history:
-        msgs.append({"role":"assistant","content":WELCOME_BUBBLE})
+        msgs.append({"role": "assistant", "content": WELCOME_BUBBLE})
     if history:
         for turn in history:
-            if isinstance(turn,(list,tuple)):
-                if turn and turn[0]: msgs.append({"role":"user","content":turn[0]})
-                if len(turn)>1 and turn[1]: msgs.append({"role":"assistant","content":turn[1]})
-            elif isinstance(turn,dict): msgs.append(turn)
-    msgs.append({"role":"user","content":user_input})
+            if isinstance(turn, (list, tuple)):
+                if turn and turn[0]:
+                    msgs.append({"role": "user", "content": turn[0]})
+                if len(turn) > 1 and turn[1]:
+                    msgs.append({"role": "assistant", "content": turn[1]})
+            elif isinstance(turn, dict):
+                msgs.append(turn)
+    msgs.append({"role": "user", "content": user_input})
 
-    resp=openai.chat.completions.create(model=MODEL,messages=msgs,tools=TOOLS)
-    msg=resp.choices[0].message
+    # Loop until the model is done with tool calls
+    while True:
+        resp = openai.chat.completions.create(model=MODEL, messages=msgs, tools=TOOLS)
+        choice = resp.choices[0]
+        msg = choice.message
 
-    if resp.choices[0].finish_reason=="tool_calls":
-        tool_msgs=_handle_tool_call(msg)
-        msgs += [msg]+tool_msgs
-        resp=openai.chat.completions.create(model=MODEL,messages=msgs)
-        msg=resp.choices[0].message
+        if choice.finish_reason == "tool_calls" and msg.tool_calls:
+            tool_msgs = _handle_tool_call(msg)
+            msgs += [msg] + tool_msgs
+            # continue loop to let the model read tool outputs and decide next step
+            continue
 
-    return msg.content
+        # Finished — return assistant content
+        return msg.content
 
 # ══════════════════════════════════════════════════════════════════════
-# 10 ► E‑MAIL ACKNOWLEDGEMENT
+# 10 ► E-MAIL ACKNOWLEDGEMENT
 # ══════════════════════════════════════════════════════════════════════
-import re
-
-# lenient ‑‑ accepts most normal addresses, rejects blanks / obvious typos
-_EMAIL_OK = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 def send_appt_email(payload: Dict[str, Any]) -> None:
     """
-    Compose and send confirmation e‑mails.
-    • Patient copy is sent only if a valid e‑mail address is supplied.
+    Compose and send confirmation e-mails.
+    • Patient copy is sent only if a valid e-mail address is supplied.
     • Staff alert is always sent.
     """
     patient_addr = (payload.get("email") or "").strip()
-    patient_ok   = bool(_EMAIL_OK.match(patient_addr))     # True ⇢ send patient copy
+    patient_ok = bool(_EMAIL_OK.match(patient_addr))  # True ⇢ send patient copy
 
-    name  = payload.get("patient_name", "Valued Patient")
-    date  = payload.get("preferred_date", "TBD")
-    time_ = payload.get("preferred_time", "")              # may be blank
-    when  = f"{date} {time_}".strip()
+    name = payload.get("patient_name", "Valued Patient")
+    date = payload.get("preferred_date", "TBD")
+    time_ = payload.get("preferred_time", "")  # may be blank
+    when = f"{date} {time_}".strip()
     reason = payload.get("reason", "General appointment")
 
-    # ---- 1. Patient confirmation (conditional) -----------------------
+    # 1) Patient confirmation (conditional)
     if patient_ok:
         body_p = (
             f"Hi {name},\n\n"
@@ -748,13 +863,11 @@ def send_appt_email(payload: Dict[str, Any]) -> None:
             f"(Reason: {reason}). We’ll confirm soon.\n\n"
             "Thank you,\nUPFH"
         )
-        send_gmail([patient_addr],
-                   "We received your appointment request – UPFH",
-                   body_p)
+        send_gmail([patient_addr], "We received your appointment request – UPFH", body_p)
     else:
-        logging.warning("send_appt_email: no valid patient e‑mail supplied.")
+        log.warning("send_appt_email: no valid patient e-mail supplied.")
 
-    # ---- 2. Staff alert (always) -------------------------------------
+    # 2) Staff alert (always)
     body_s = (
         "NEW REQUEST\n"
         f"Patient: {name}\n"
@@ -762,6 +875,4 @@ def send_appt_email(payload: Dict[str, Any]) -> None:
         f"Date/time: {when}\n"
         f"Reason: {reason}"
     )
-    send_gmail([FROM_ADDR],
-               "NEW appointment request – action needed",
-               body_s)
+    send_gmail([FROM_ADDR], "NEW appointment request – action needed", body_s)
