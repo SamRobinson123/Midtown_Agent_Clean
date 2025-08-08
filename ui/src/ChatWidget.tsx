@@ -1,181 +1,187 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import "./chat-widget.css";
+import React, { useMemo, useRef, useState } from "react";
 
-type Msg = { id: string; role: "user" | "assistant"; text: string; rated?: null | boolean };
-const uid = () => Math.random().toString(36).slice(2, 9);
+type Msg = { role: "ai" | "user"; text: string };
 
-const initialBotMsg = "👋 **Welcome!** How can I help you today?";
-const quickReplies = [
-  { label: "Appointments",      text: "I’d like to book or change an appointment" },
-  { label: "General Questions", text: "I have a general question" },
-];
+const WELCOME =
+  "👋 **Welcome!** How can I help you today?";
+
+const apiBase = (import.meta as any).env.VITE_API_BASE || ""; // same origin
+
+const asset = (name: string) =>
+  `${import.meta.env.BASE_URL}${name}`; // works with base="/ui/"
 
 export default function ChatWidget() {
   const [open, setOpen] = useState(true);
-  const [busy, setBusy] = useState(false);
+  const [msgs, setMsgs] = useState<Msg[]>([{ role: "ai", text: WELCOME }]);
   const [input, setInput] = useState("");
-  const [messages, setMessages] = useState<Msg[]>([
-    { id: uid(), role: "assistant", text: initialBotMsg, rated: null },
-  ]);
+  const [sending, setSending] = useState(false);
+  const listRef = useRef<HTMLDivElement>(null);
 
-  // responsive: toggle full-screen on small screens + rotation
-  const [isMobile, setIsMobile] = useState(false);
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const mql = window.matchMedia("(max-width: 480px)");
-    const onChange = (e: MediaQueryListEvent | MediaQueryList) =>
-      setIsMobile("matches" in e ? e.matches : (e as MediaQueryList).matches);
-    onChange(mql);
-    // @ts-ignore
-    (mql.addEventListener ?? mql.addListener).call(mql, "change", onChange);
-    return () => {
-      // @ts-ignore
-      (mql.removeEventListener ?? mql.removeListener).call(mql, "change", onChange);
-    };
-  }, []);
+  const logoSrc = asset("revolt-logo.png");
 
-  const scrollRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-  }, [messages.length]);
+  // Convert flat array of messages → pairs for the backend /chat
+  const historyPairs = useMemo(() => {
+    const pairs: (string | null)[][] = [];
+    let curUser: string | null = null;
+    msgs.forEach((m) => {
+      if (m.role === "user") {
+        if (curUser !== null) pairs.push([curUser, ""]); // stray safety
+        curUser = m.text;
+      } else {
+        // ai
+        if (curUser === null) pairs.push([null, m.text]);
+        else {
+          pairs.push([curUser, m.text]);
+          curUser = null;
+        }
+      }
+    });
+    // If last is dangling user (no AI yet), push it paired with empty answer
+    if (curUser !== null) pairs.push([curUser, ""]);
+    return pairs;
+  }, [msgs]);
 
-  const lastAssistant = useMemo(
-    () => [...messages].reverse().find((m) => m.role === "assistant"),
-    [messages]
-  );
+  const scrollToEnd = () => {
+    requestAnimationFrame(() => {
+      listRef.current?.scrollTo({ top: 999999, behavior: "smooth" });
+    });
+  };
 
-  async function send(text: string) {
-    const t = text.trim();
-    if (!t || busy) return;
+  const send = async (text?: string) => {
+    const content = (text ?? input).trim();
+    if (!content || sending) return;
 
-    setMessages((m) => [...m, { id: uid(), role: "user", text: t }]);
+    setMsgs((m) => [...m, { role: "user", text: content }]);
     setInput("");
-    setBusy(true);
+    setSending(true);
+    scrollToEnd();
 
     try {
-      // build pairs for /chat
-      const pairs: [string, string][] = [];
-      let pending: string | null = null;
-      for (const m of messages) {
-        if (m.role === "user") pending = m.text;
-        else if (m.role === "assistant" && pending !== null) { pairs.push([pending, m.text]); pending = null; }
-      }
-      const resp = await fetch("/chat", {
+      const res = await fetch(`${apiBase}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_input: t, history: pairs }),
+        body: JSON.stringify({
+          user_input: content,
+          history: historyPairs,
+        }),
       });
-      const data = await resp.json();
-      setMessages((m) => [...m, { id: uid(), role: "assistant", text: data.answer, rated: null }]);
-    } catch {
-      setMessages((m) => [
+      const data = await res.json();
+      const answer = (data?.answer ?? "").toString();
+      setMsgs((m) => [...m, { role: "ai", text: answer }]);
+    } catch (e) {
+      setMsgs((m) => [
         ...m,
-        { id: uid(), role: "assistant", text: "Sorry—something went wrong. Please try again.", rated: null },
+        {
+          role: "ai",
+          text:
+            "Sorry—I'm having trouble reaching the server. Please try again in a moment.",
+        },
       ]);
     } finally {
-      setBusy(false);
+      setSending(false);
+      scrollToEnd();
     }
-  }
+  };
 
-  function handleRate(id: string, ok: boolean) {
-    setMessages((m) => m.map((x) => (x.id === id ? { ...x, rated: ok } : x)));
+  const quick = (prompt: string) => () => send(prompt);
+
+  if (!open) {
+    // could show a floating launcher; for now, a small pill:
+    return (
+      <div className="fixed-panel">
+        <button className="pill" onClick={() => setOpen(true)}>
+          💬 Chat
+        </button>
+      </div>
+    );
   }
 
   return (
-    <>
-      {!open && (
-        <button className="rw-launcher" aria-label="Open chat" onClick={() => setOpen(true)}>
-          <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
-            <path d="M21 12a9 9 0 1 1-3.3-6.9l2.3-2.3" stroke="#fff" strokeWidth="1.8" strokeLinecap="round"/>
-            <path d="M8 11h8M8 15h5" stroke="#fff" strokeWidth="1.8" strokeLinecap="round"/>
-          </svg>
-        </button>
-      )}
-
-      {open && (
-        <section className={`rw-widget ${isMobile ? "rw-mobile" : ""}`} role="dialog" aria-label="UPFH Virtual Front Desk">
-          {/* HEADER */}
-          <header className="rw-header">
-            {/* “AI” tile */}
-            <div className="rw-logo-tile" aria-hidden>AI</div>
-
-            <div className="rw-brand">
-              <div className="rw-title">UPFH Virtual Front Desk</div>
-              <div className="rw-subtitle">We typically reply in a few minutes.</div>
-            </div>
-            <button className="rw-close" aria-label="Minimize" onClick={() => setOpen(false)}>✕</button>
-
-            {/* Quick-reply chips */}
-            <div className="rw-quick">
-              {quickReplies.map((q) => (
-                <button key={q.label} className="rw-chip" onClick={() => send(q.text)}>
-                  {q.label}
-                </button>
-              ))}
-            </div>
-          </header>
-
-          {/* MESSAGES */}
-          <div className="rw-scroll" ref={scrollRef}>
-            {messages.map((m) => (
-              <div key={m.id} className={`rw-row ${m.role === "user" ? "is-user" : "is-bot"}`}>
-                <div className={`rw-msg ${m.role === "user" ? "rw-msg-user" : "rw-msg-bot"}`}>
-                  {renderMarkdownLite(m.text)}
-
-                  {m.role === "assistant" && m.id === lastAssistant?.id && m.rated === null && (
-                    <div className="rw-rate">
-                      <span>Was this helpful?</span>
-                      <button onClick={() => handleRate(m.id, true)} aria-label="Yes">👍</button>
-                      <button onClick={() => handleRate(m.id, false)} aria-label="No">👎</button>
-                    </div>
-                  )}
-                  {m.role === "assistant" && typeof m.rated === "boolean" && (
-                    <div className="rw-rate-note">{m.rated ? "Thanks for the feedback!" : "Got it, thanks!"}</div>
-                  )}
-                </div>
-              </div>
-            ))}
+    <div className="fixed-panel">
+      <div className="chat-card" role="dialog" aria-label="Chat widget">
+        {/* Header */}
+        <div className="header">
+          <div className="avatar-badge">AI</div>
+          <div>
+            <div className="title">UPFH Virtual Front Desk</div>
+            <div className="subtitle">We typically reply in a few minutes.</div>
           </div>
+          <div className="header-x" onClick={() => setOpen(false)} aria-label="Close">
+            ×
+          </div>
+        </div>
 
-          {/* INPUT + BRAND */}
-          <footer className="rw-input">
-            <input
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && send(input)}
-              placeholder={busy ? "Thinking…" : "Enter your message…"}
-              disabled={busy}
-              aria-label="Type a message"
-            />
-            <button className="rw-send" onClick={() => send(input)} disabled={busy || !input.trim()}>
-              Send
-            </button>
+        {/* Quick actions */}
+        <div className="pills">
+          <button className="pill" onClick={quick("I’d like to book or change an appointment")}>
+            Appointments
+          </button>
+          <button className="pill" onClick={quick("I have a general question")}>
+            General Questions
+          </button>
+        </div>
 
-            {/* Real Revolt logo from /public */}
-            <div className="rw-powered">
-              <img className="rw-powered-logo" src="/revolt-logo.svg" alt="Revolt AI logo" />
-              <span>Powered by <strong>Revolt AI</strong></span>
+        {/* Messages */}
+        <div className="messages" ref={listRef}>
+          {msgs.map((m, i) => (
+            <div className={`row ${m.role}`} key={i}>
+              {m.role === "ai" && <div className="ai-avatar">AI</div>}
+              <div className="msg">
+                {/* allow lightweight markdown (**bold**) for welcome, very simple */}
+                <RichText text={m.text} />
+                {i === 0 && m.role === "ai" && (
+                  <div className="meta">
+                    <span>Was this helpful?</span> <span>👍</span> <span>👎</span>
+                  </div>
+                )}
+              </div>
             </div>
-          </footer>
-        </section>
-      )}
-    </>
+          ))}
+        </div>
+
+        {/* Footer */}
+        <div className="footer">
+          <input
+            className="input"
+            placeholder="Enter your message…"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => (e.key === "Enter" ? send() : null)}
+            disabled={sending}
+            aria-label="Message input"
+          />
+          <button className="send" onClick={() => send()} disabled={sending}>
+            {sending ? "…" : "Send"}
+          </button>
+          <div className="brand" aria-hidden>
+            <img src={logoSrc} alt="Revolt AI" />
+            <span>Powered by <strong>Revolt AI</strong></span>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
-/* tiny markdown: paragraphs + **bold** */
-function renderMarkdownLite(md: string) {
+/** Very tiny “markdown” renderer: supports **bold** and line breaks only */
+function RichText({ text }: { text: string }) {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
   return (
-    <>
-      {md.split(/\n{2,}/).map((p, i) => (
-        <p key={i} className="rw-p">
-          {p.split(/(\*\*.+?\*\*)/g).map((chunk, j) =>
-            chunk.startsWith("**") && chunk.endsWith("**")
-              ? <strong key={j}>{chunk.slice(2, -2)}</strong>
-              : <span key={j}>{chunk}</span>
-          )}
-        </p>
-      ))}
-    </>
+    <div>
+      {parts.map((p, i) =>
+        p.startsWith("**") && p.endsWith("**") ? (
+          <strong key={i}>{p.slice(2, -2)}</strong>
+        ) : (
+          <span key={i}>
+            {p.split("\n").map((line, j) => (
+              <React.Fragment key={j}>
+                {line}
+                {j < p.split("\n").length - 1 && <br />}
+              </React.Fragment>
+            ))}
+          </span>
+        )
+      )}
+    </div>
   );
 }
