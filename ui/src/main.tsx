@@ -1,10 +1,12 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
 import ChatWidget from "./ChatWidget";
-import "./index.css";
 
-createRoot(document.getElementById("root")!).render(
+const root = createRoot(document.getElementById("root")!);
+root.render(
   <React.StrictMode>
-    <ChatWidget />
+    <div style={{ display: "flex", justifyContent: "center", padding: 16 }}>
+      <ChatWidget />
+    </div>
   </React.StrictMode>
 );
