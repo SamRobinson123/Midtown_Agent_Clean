@@ -1,3 +1,4 @@
+# backend/main.py
 import os, re, html, logging
 from typing import Any, List, Dict
 from pathlib import Path
@@ -9,7 +10,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from twilio.twiml.voice_response import VoiceResponse
 from langdetect import detect
-import gradio as gr, uvicorn
+import uvicorn
 
 try:
     from dotenv import load_dotenv
@@ -18,7 +19,6 @@ except ModuleNotFoundError:
     pass
 
 from bot.chatbot import chat
-from .gradio_app import build_widget
 
 # ───────────────────────────────────
 SPEECH_RATE = "93%"
@@ -152,21 +152,16 @@ if UI_DIST.exists():
 
     @app.get("/")
     def root_redirect():
-        # Redirect root to the UI
         return RedirectResponse(url="/ui")
 else:
     logging.warning("UI build not found at %s. Build it with `npm run build` in ui/.", UI_DIST)
 
     @app.get("/")
     def root_status():
-        return {"status": "ok", "message": "UI not built yet. Visit /gradio or /docs."}
-
-# ── Gradio widget (kept for debugging) ─────────────────────────────────
-# Mount at /gradio so it doesn't conflict with the root or /ui
-gr.mount_gradio_app(app, build_widget(), path="/gradio")
+        return {"status": "ok", "message": "UI not built yet. Visit /docs."}
 
 # ── Uvicorn entrypoint ────────────────────────────────────────────────
 if __name__ == "__main__":
     logging.basicConfig(level="INFO", format="%(levelname)s  %(message)s")
     uvicorn.run("backend.main:app", host="0.0.0.0",
-                port=int(os.getenv("PORT", 8000)), reload=True)
+                port=int(os.getenv("PORT", 10000)), reload=True)
