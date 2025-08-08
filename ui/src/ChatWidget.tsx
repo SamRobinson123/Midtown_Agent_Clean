@@ -1,228 +1,239 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
-import { MessageSquare, X, Send, Phone, Loader2, Sparkles } from "lucide-react";
 
-export type ChatWidgetProps = {
-  apiBase?: string;      // default "/chat" (same origin as FastAPI)
-  title?: string;
-  subtitle?: string;
-  brandColor?: string;   // CSS color e.g. "#2563eb"
-  logoUrl?: string;
-  callHref?: string;     // e.g., "/voice" or "tel:+18014170131"
-  welcome?: string;
-  position?: "bottom-right" | "bottom-left";
-  tenant?: string;       // optional for analytics
+type Msg = { id: string; role: "user" | "assistant"; text: string; rated?: null | boolean };
+
+const BRAND = {
+  headerFrom: "from-indigo-600",
+  headerTo: "to-sky-500",
+  primary: "indigo-600",
 };
 
-type Pair = [string | null, string | null]; // [user, assistant]
+const initialBotMsg =
+  "👋 **Welcome!** How can I help you today?";
 
-const toPlain = (md: string) =>
-  md.replace(/[*_`>#\\\-•]/g, " ").replace(/\s+/g, " ").trim();
+const quickReplies = [
+  "I’d like to book or change an appointment",
+  "Can you estimate my costs?",
+  "I have a general question",
+];
 
-const DEFAULT_WELCOME = "👋 **Welcome!** How can I help you today?";
+function uid() {
+  return Math.random().toString(36).slice(2, 10);
+}
 
-export default function ChatWidget({
-  apiBase = "/chat",
-  title = "UPFH Virtual Front Desk",
-  subtitle = "Book, pricing, providers",
-  brandColor = "#2563eb",
-  logoUrl,
-  callHref,
-  welcome = DEFAULT_WELCOME,
-  position = "bottom-right",
-  tenant = "default",
-}: ChatWidgetProps) {
-  // Server history: pairs like [[null, welcome], [user, assistant], ...]
-  const [history, setHistory] = useState<Pair[]>([[null, welcome]]);
-  const [messages, setMessages] = useState<
-    { role: "user" | "assistant"; content: string }[]
-  >([{ role: "assistant", content: welcome }]);
-
+export default function ChatWidget() {
+  const [open, setOpen] = useState(true);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [messages, setMessages] = useState<Msg[]>([
+    { id: uid(), role: "assistant", text: initialBotMsg },
+  ]);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
-  const bottomRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), [messages]);
+  // auto-scroll to bottom
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+  }, [messages.length]);
 
-  const posClass = position === "bottom-left" ? "left-6" : "right-6";
-  const headerStyle = useMemo(() => ({ background: brandColor }), [brandColor]);
-  const pillStyle = useMemo(() => ({ background: `${brandColor}1A`, color: brandColor }), [brandColor]);
-  const launcherStyle = useMemo(() => ({ background: brandColor }), [brandColor]);
+  const lastAssistant = useMemo(
+    () => [...messages].reverse().find((m) => m.role === "assistant"),
+    [messages]
+  );
 
-  async function send() {
-    const text = input.trim();
-    if (!text || busy) return;
-
-    setError(null);
-    setBusy(true);
+  async function send(text: string) {
+    if (!text.trim() || busy) return;
+    const user: Msg = { id: uid(), role: "user", text: text.trim() };
+    setMessages((m) => [...m, user]);
     setInput("");
-
-    // optimistic bubble
-    setMessages((m) => [...m, { role: "user", content: text }]);
+    setBusy(true);
 
     try {
-      const resp = await fetch(apiBase, {
+      // Build history pairs for your FastAPI /chat endpoint
+      // It wants: [{"user_input": "...", "history": [[u1,a1],[u2,a2], ...]}]
+      const pairs: [string, string][] = [];
+      let u: string | null = null;
+      for (const m of messages) {
+        if (m.role === "user") u = m.text;
+        else if (m.role === "assistant" && u !== null) {
+          pairs.push([u, m.text]);
+          u = null;
+        }
+      }
+      // (The “text” we’re sending now is the new user turn)
+      const resp = await fetch("/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_input: text, history }),
+        body: JSON.stringify({ user_input: text.trim(), history: pairs }),
       });
-      if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
-      const data = (await resp.json()) as { answer: string };
-
-      setMessages((m) => [...m, { role: "assistant", content: data.answer || "" }]);
-      setHistory((h) => [...h, [text, data.answer || ""]]);
-    } catch (e: any) {
-      setError(e.message || "Request failed");
-      setMessages((m) => [...m, { role: "assistant", content: "Sorry—something went wrong. Please try again." }]);
+      const data = await resp.json();
+      const bot: Msg = { id: uid(), role: "assistant", text: data.answer, rated: null };
+      setMessages((m) => [...m, bot]);
+    } catch (e) {
+      const bot: Msg = {
+        id: uid(),
+        role: "assistant",
+        text: "Sorry—something went wrong. Please try again in a moment.",
+      };
+      setMessages((m) => [...m, bot]);
     } finally {
       setBusy(false);
     }
   }
 
-  function quick(text: string) {
-    setInput(text);
-    setTimeout(send, 0);
+  function handleRate(id: string, ok: boolean) {
+    setMessages((m) => m.map((x) => (x.id === id ? { ...x, rated: ok } : x)));
+    // TODO: optionally POST rating to your backend
   }
 
-  const [open, setOpen] = useState(false);
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  const Launcher = (
+    <button
+      aria-label="Open chat"
+      onClick={() => setOpen(true)}
+      className="fixed bottom-5 right-5 h-14 w-14 rounded-full shadow-xl bg-gradient-to-br from-indigo-600 to-sky-500 text-white grid place-items-center hover:opacity-95 focus:outline-none"
+    >
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
+        <path d="M21 12a9 9 0 1 1-3.3-6.9l2.3-2.3" stroke="white" strokeWidth="1.8" strokeLinecap="round" />
+        <path d="M8 11h8M8 15h5" stroke="white" strokeWidth="1.8" strokeLinecap="round" />
+      </svg>
+    </button>
+  );
 
   return (
-    <div className="revolt-chat-widget">
-      {/* Floating launcher */}
-      <button
-        aria-label="Open chat"
-        onClick={() => setOpen((v) => !v)}
-        className={`fixed ${posClass} bottom-6 w-14 h-14 rounded-full shadow-xl text-white flex items-center justify-center focus:outline-none focus:ring-4 transition-transform`}
-        style={launcherStyle}
-      >
-        <MessageSquare className="w-6 h-6" />
-      </button>
+    <>
+      {!open && Launcher}
 
-      {/* Panel */}
-      <AnimatePresence>
-        {open && (
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 20 }}
-            transition={{ type: "spring", stiffness: 240, damping: 24 }}
-            className={`fixed ${posClass} bottom-24 w-[380px] max-w-[92vw] max-h-[75vh] bg-white border border-gray-200 rounded-2xl shadow-2xl flex flex-col overflow-hidden`}
-          >
-            {/* Header */}
-            <div className="flex items-center gap-3 p-3 text-white" style={headerStyle}>
-              {logoUrl ? (
-                <img src={logoUrl} alt="logo" className="w-6 h-6 rounded-sm bg-white/90 p-1" />
-              ) : (
-                <Sparkles className="w-5 h-5" />
-              )}
-              <div className="flex-1">
-                <div className="text-sm font-semibold leading-tight">{title}</div>
-                <div className="text-xs leading-5 opacity-90">{subtitle}</div>
+      {open && (
+        <div className="fixed bottom-5 right-5 w-[360px] sm:w-[390px] max-h-[78vh] bg-white rounded-2xl shadow-2xl border border-gray-200 overflow-hidden flex flex-col">
+          {/* Header */}
+          <div className={`relative bg-gradient-to-r ${BRAND.headerFrom} ${BRAND.headerTo} p-4 pb-14 text-white`}>
+            <div className="flex items-center gap-3">
+              {/* Avatar w/ AI letters */}
+              <div className="h-11 w-11 rounded-full bg-white/15 border border-white/20 grid place-items-center font-semibold">
+                <span className="tracking-wide">AI</span>
+              </div>
+              <div className="min-w-0">
+                <div className="font-semibold leading-5">UPFH Virtual Front Desk</div>
+                <div className="text-white/90 text-[13px]">We typically reply in a few minutes.</div>
               </div>
               <button
-                aria-label="Close"
+                className="ml-auto rounded-full p-2 hover:bg-white/10"
                 onClick={() => setOpen(false)}
-                className="p-1.5 rounded hover:bg-white/10"
+                aria-label="Minimize"
+                title="Minimize"
               >
-                <X className="w-5 h-5" />
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                  <path d="M7 15l10-10M7 5h10v10" stroke="white" strokeWidth="1.8" strokeLinecap="round" />
+                </svg>
               </button>
             </div>
 
-            {/* Quick actions */}
-            <div className="flex gap-2 px-3 pt-3 pb-2 flex-wrap">
-              <button className="px-3 py-1.5 text-xs font-medium rounded-full"
-                style={pillStyle} onClick={() => quick("I’d like to book or change an appointment")}>
-                Appointments
-              </button>
-              <button className="px-3 py-1.5 text-xs font-medium rounded-full"
-                style={pillStyle} onClick={() => quick("Can you estimate my costs?")}>
-                Estimated Costs
-              </button>
-              <button className="px-3 py-1.5 text-xs font-medium rounded-full"
-                style={pillStyle} onClick={() => quick("I have a general question")}>
-                General Questions
-              </button>
-              {callHref && (
-                <a href={callHref}
-                   className="px-3 py-1.5 text-xs font-medium rounded-full inline-flex items-center gap-1"
-                   style={pillStyle}>
-                  <Phone className="w-3.5 h-3.5" /> Call
-                </a>
-              )}
-            </div>
-
-            {/* Messages */}
-            <div className="flex-1 overflow-y-auto px-3 pb-2" aria-live="polite" aria-relevant="additions">
-              {messages.map((m, i) => (
-                <div key={i} className={`my-1.5 flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-                  <div
-                    className={`${m.role === "user" ? "bg-indigo-50" : "bg-white"} max-w-[80%] border border-gray-200 rounded-2xl px-3 py-2 text-[14px] leading-relaxed shadow-sm`}
+            {/* Quick replies */}
+            <div className="absolute left-0 right-0 -bottom-4 px-4">
+              <div className="flex gap-2 flex-wrap">
+                {quickReplies.map((q) => (
+                  <button
+                    key={q}
+                    onClick={() => send(q)}
+                    className="px-3 py-1.5 rounded-full bg-white text-gray-800 text-sm shadow-sm hover:bg-gray-50"
                   >
-                    <div className="whitespace-pre-wrap">{m.content}</div>
-                  </div>
-                </div>
-              ))}
-              {busy && (
-                <div className="my-1.5 flex justify-start">
-                  <div className="bg-white border border-gray-200 rounded-2xl px-3 py-2 text-[14px] shadow-sm inline-flex items-center gap-2">
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Thinking…
-                  </div>
-                </div>
-              )}
-              <div ref={bottomRef} />
+                    {q}
+                  </button>
+                ))}
+              </div>
             </div>
+          </div>
 
-            {/* Error */}
-            {error && <div className="px-3 pb-2 text-xs text-red-600">{error}</div>}
+          {/* Messages */}
+          <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 pt-6 space-y-3 bg-white">
+            {messages.map((m) => (
+              <div key={m.id} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+                <div
+                  className={`max-w-[80%] rounded-2xl px-3.5 py-2.5 text-[15px] leading-relaxed shadow-sm ${
+                    m.role === "user"
+                      ? "bg-indigo-50 text-gray-900 border border-indigo-100"
+                      : "bg-white text-gray-900 border border-gray-200"
+                  }`}
+                >
+                  {renderMarkdownLite(m.text)}
+                  {/* rating row for the last assistant message */}
+                  {m.role === "assistant" && m.id === lastAssistant?.id && m.rated === null && (
+                    <div className="mt-2.5 flex items-center gap-2 text-gray-500 text-sm">
+                      <span>Was this helpful?</span>
+                      <button
+                        className="rounded-full p-1.5 hover:bg-gray-100"
+                        aria-label="Yes"
+                        onClick={() => handleRate(m.id, true)}
+                      >
+                        👍
+                      </button>
+                      <button
+                        className="rounded-full p-1.5 hover:bg-gray-100"
+                        aria-label="No"
+                        onClick={() => handleRate(m.id, false)}
+                      >
+                        👎
+                      </button>
+                    </div>
+                  )}
+                  {m.role === "assistant" && typeof m.rated === "boolean" && (
+                    <div className="mt-2 text-xs text-gray-500">{m.rated ? "Thanks for the feedback!" : "Got it, thanks!"}</div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
 
-            {/* Input */}
-            <form
-              className="p-2 border-t border-gray-200 flex items-center gap-2 bg-white"
-              onSubmit={(e) => {
-                e.preventDefault();
-                send();
-              }}
-            >
+          {/* Input */}
+          <div className="relative p-3 border-t border-gray-200 bg-white">
+            <div className="flex items-center gap-2">
+              {/* fake icons (non-functional placeholders) */}
+              <button className="p-2 rounded-full hover:bg-gray-100" title="Attach">
+                📎
+              </button>
+              <button className="p-2 rounded-full hover:bg-gray-100" title="Emoji">
+                😊
+              </button>
               <input
-                name="message"
-                autoComplete="off"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                placeholder="Type a message…"
-                className="flex-1 h-10 px-3 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-200"
-                aria-label="Your message"
+                onKeyDown={(e) => e.key === "Enter" && send(input)}
+                placeholder={busy ? "Thinking…" : "Enter your message…"}
+                className="flex-1 rounded-xl border border-gray-300 px-3.5 py-2 text-[15px] focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                disabled={busy}
               />
               <button
-                type="submit"
+                onClick={() => send(input)}
                 disabled={busy || !input.trim()}
-                className="h-10 px-3 rounded-xl text-white flex items-center gap-1 disabled:opacity-50"
-                style={{ background: brandColor }}
-                aria-label="Send message"
+                className="rounded-xl bg-indigo-600 text-white px-3 py-2 text-sm font-medium hover:bg-indigo-500 disabled:opacity-40"
               >
-                <Send className="w-4 h-4" />
                 Send
               </button>
-            </form>
-
-            {/* Footer */}
-            <div className="px-3 py-2 text-[11px] text-gray-400 border-t border-gray-100">
-              Powered by Revolt AI
             </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
 
-      {/* Accessibility live region (hidden) */}
-      <div className="sr-only" aria-live="polite">
-        {toPlain(messages[messages.length - 1]?.content || "")}
-      </div>
-    </div>
+            {/* Powered by */}
+            <div className="mt-3 flex items-center justify-center gap-2 text-xs text-gray-500">
+              <img src="/revolt-logo.png" className="h-4 w-4 object-contain opacity-80" alt="Revolt AI" />
+              <span>Powered by <span className="font-medium">Revolt AI</span></span>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
+}
+
+/** Tiny markdown renderer: **bold** and basic line breaks only */
+function renderMarkdownLite(md: string) {
+  const withBreaks = md.split(/\n{2,}/).map((p, i) => (
+    <p key={i} className="mb-2 last:mb-0">
+      {p.split(/(\*\*.+?\*\*)/g).map((chunk, j) =>
+        chunk.startsWith("**") && chunk.endsWith("**") ? (
+          <strong key={j}>{chunk.slice(2, -2)}</strong>
+        ) : (
+          <span key={j}>{chunk}</span>
+        )
+      )}
+    </p>
+  ));
+  return <>{withBreaks}</>;
 }
