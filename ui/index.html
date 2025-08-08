@@ -2,15 +2,12 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta
-      name="viewport"
-      content="width=device-width, initial-scale=1.0"
-    />
-    <title>UPFH Assistant</title>
+    <!-- Makes the widget behave correctly on phones (safe area + no zoom) -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>UPFH Virtual Front Desk</title>
   </head>
-  <body class="bg-white">
+  <body>
     <div id="root"></div>
-    <!-- Vite will resolve this; in production the base is /ui/ -->
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
