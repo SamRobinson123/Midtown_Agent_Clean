@@ -182,3 +182,87 @@ button{ font-family: inherit; }
   }
   .launcher{ width:60px; height:60px; }
 }
+
+/* ───────── Calendar Modal ───────── */
+.cal-overlay{
+  position: fixed; inset: 0; background: rgba(17,24,39,.48);
+  display: flex; align-items: center; justify-content: center; padding: 18px;
+  z-index: calc(var(--z) + 10);
+}
+.cal-modal{
+  background:#fff; width:min(1000px, 96vw); max-height:90vh; border-radius:16px; overflow:hidden;
+  border:1px solid var(--border); box-shadow: var(--shadow);
+  display:grid; grid-template-columns: 1.2fr 1fr;
+}
+.cal-headbar{
+  grid-column: 1 / -1;
+  background:linear-gradient(90deg, var(--brand-1), var(--brand-2));
+  color:#fff; padding:14px 16px; display:flex; align-items:center; justify-content:space-between;
+}
+.cal-title{ font-weight:900; }
+.cal-close{
+  width:36px; height:36px; border:none; border-radius:10px; background:rgba(255,255,255,.18); color:#fff; font-size:20px; cursor:pointer;
+}
+.cal-close:hover{ background:rgba(255,255,255,.28); }
+
+.cal-col{ padding:16px; border-right:1px solid var(--border); overflow:auto; }
+.cal-top{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:12px; }
+.cal-month{ font-weight:900; font-size:18px; }
+.cal-nav{ display:flex; gap:8px; }
+.icon-btn{ width:36px; height:36px; border:1px solid var(--border); border-radius:10px; background:#fff; cursor:pointer; }
+.cal-dow{ display:grid; grid-template-columns: repeat(7, 1fr); gap:6px; color:var(--muted); font-size:12px; margin-bottom:6px; }
+.cal-grid{ display:grid; grid-template-columns: repeat(7, 1fr); gap:8px; }
+.cal-cell{
+  background:#fff; border:1px solid var(--border); border-radius:12px; min-height:80px; padding:8px;
+  display:flex; flex-direction:column; gap:6px; cursor:pointer;
+  transition: box-shadow .2s ease, border-color .2s ease, transform .05s ease;
+}
+.cal-cell:hover{ border-color:#d7deff; box-shadow:0 6px 20px rgba(43,92,255,.08); }
+.cal-cell.is-disabled{ opacity:.45; filter:saturate(.75); cursor:not-allowed; }
+.cal-cell.is-selected{ outline:3px solid rgba(65,117,255,.15); border-color:#cfe0ff; }
+
+.slot-col{ padding:16px; display:flex; flex-direction:column; gap:12px; }
+.slot-top{ display:flex; align-items:center; justify-content:space-between; }
+.slot-title{ font-weight:900; font-size:16px; }
+.slot-tz{ color:var(--muted); font-size:12px; }
+.slot-list{ display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap:8px; overflow:auto; }
+.slot-btn{
+  border:1px solid var(--border); border-radius:12px; padding:10px 12px; background:#fff; cursor:pointer; text-align:center; font-weight:800;
+}
+.slot-btn:hover{ border-color:#cfe0ff; box-shadow:0 4px 14px rgba(43,92,255,.10); }
+.slot-btn.is-active{ outline:3px solid rgba(65,117,255,.15); border-color:#cfe0ff; }
+.slot-loading, .slot-empty{ color: var(--muted); font-size:14px; padding:6px 2px; }
+
+.slot-sticky{
+  margin-top:auto; display:flex; gap:10px; align-items:center; justify-content:space-between;
+  padding-top:8px; border-top:1px solid var(--border);
+}
+.slot-actions{ display:flex; align-items:center; gap:8px; }
+.primary{
+  background:linear-gradient(90deg, var(--brand-1), var(--brand-2));
+  color:#fff; border:none; border-radius:12px; padding:12px 14px; font-weight:900; cursor:pointer; min-width:180px;
+  box-shadow:0 10px 24px rgba(45,114,255,.25);
+}
+.ghost{ border:1px solid var(--border); background:#fff; border-radius:12px; padding:10px 12px; font-weight:800; cursor:pointer; }
+
+@media (max-width: 900px){
+  .cal-modal{ grid-template-columns: 1fr; }
+  .cal-col{ border-right:none; border-bottom:1px solid var(--border); }
+}
+
+/* ── Appointment summary (details step, left column) ─────────────── */
+.appt-summary{ display:flex; flex-direction:column; gap:10px; padding: 6px 2px; }
+.appt-row{ display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.appt-k{ color: var(--muted); font-weight:600; }
+.appt-v{ font-weight:800; }
+.tz-small{ color: var(--muted); font-weight:600; font-size: 12px; margin-left: 4px; }
+
+/* ── Simple form system (details step, right column) ─────────────── */
+.form{ display:flex; flex-direction:column; gap:12px; }
+.field{ display:flex; flex-direction:column; gap:6px; }
+.label{ font-weight:800; font-size: 13px; color:#111827; }
+.control{
+  border:1px solid var(--border); border-radius:12px; padding:10px 12px; font-size:14px; outline:none; background:#fff;
+}
+.control:focus{ border-color:#cfe0ff; box-shadow:0 0 0 3px rgba(65,117,255,.12); }
+.error{ color:#b42318; background:#fee4e2; border:1px solid #fecdca; border-radius:10px; padding:8px 10px; font-weight:700; }
